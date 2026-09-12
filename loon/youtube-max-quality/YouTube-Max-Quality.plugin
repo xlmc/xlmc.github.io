@@ -1,5 +1,5 @@
 #!name = YouTube Max Quality Probe
-#!desc = 探测 YouTube 官方客户端播放响应中是否向当前账号下发最高画质与 1080p Premium / Enhanced Bitrate 信息。当前版本只读响应，不修改播放数据。
+#!desc = 探测 YouTube 官方客户端实际可用画质、1080p Premium / Enhanced Bitrate 提示与 HLS 播放清单。当前版本只读响应，不修改播放数据。
 #!author = xlmc
 #!homepage = https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
 #!system = iOS,iPadOS
@@ -14,6 +14,7 @@ notify = switch,true,tag=结果通知,desc=检测到 Premium 或常见高清画�
 
 [Script]
 response if ${url} ~= /^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(player|get_watch)(?:\?|$)/i then script("https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-quality-probe.js?v=2", {${notify}}) with enable=${enabled}, tag="YouTube 画质探测", timeout=20, debug=${debug}, requires_body=true, binary_body_mode=true
+response if ${url} ~= /^https:\/\/manifest\.googlevideo\.com\/api\/manifest\/hls_variant\//i then script("https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-hls-probe.js?v=1") with enable=${enabled}, tag="YouTube 实际流探测", timeout=20, debug=${debug}, requires_body=true
 
 [Mitm]
-hostname = youtubei.googleapis.com
+hostname = youtubei.googleapis.com, manifest.googlevideo.com
