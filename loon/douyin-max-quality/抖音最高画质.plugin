@@ -1,5 +1,5 @@
 #!name = 抖音最高画质
-#!desc = 抖音移动端所有普通视频优先使用接口实际下发的最高码率档。按抖音自身 bit_rate / gear_name / quality_type 码率阶梯选择，不套用 YouTube 的分辨率/HDR/FPS 排序；保留所选档位的原生规格元数据。
+#!desc = 抖音移动端视频优先使用接口实际下发的最高码率档。仅拦截明确返回视频资源的接口，评论、主页框架及其他非视频接口不处理；按抖音自身 bit_rate / gear_name / quality_type 码率阶梯选择。
 #!author = xlmc
 #!homepage = https://github.com/xlmc/xlmc.github.io/tree/main/loon/douyin-max-quality
 #!system = iOS,iPadOS
@@ -8,10 +8,10 @@
 #!type = normal
 
 [Argument]
-enabled = switch,true,tag=抖音视频最高画质,desc=推荐、详情、搜索、作品、关注、收藏、合集等普通视频均优先使用抖音实际下发的最高码率档
+enabled = switch,true,tag=抖音视频最高画质,desc=推荐、详情、搜索、作品、关注、附近、收藏、合集等视频接口优先使用抖音实际下发的最高码率档；评论等非视频接口不处理
 
 [Script]
-response if ${url} ~= /^https:\/\/(?:[^\/]+\.)?(?:amemv\.com|snssdk\.com|douyin\.com|iesdouyin\.com)\/aweme\/v\d+\/(?:[^?#]*)?(?:\?|$)/i then script("https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/douyin-max-quality/douyin-max-quality.js?v=3") with enable=${enabled}, tag="抖音最高画质", timeout=20, requires_body=true
+response if ${url} ~= /^https:\/\/(?:[^\/]+\.)?(?:amemv\.com|snssdk\.com|douyin\.com|iesdouyin\.com)\/aweme\/v\d+\/(?:feed|aweme\/detail|multi\/aweme\/detail|aweme\/post|follow\/feed|nearby\/feed|search\/item|general\/search\/single|hot\/search\/video\/list|aweme\/favorite|mix\/aweme)(?:\/|\?|$)/i then script("https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/douyin-max-quality/douyin-max-quality.js?v=4") with enable=${enabled}, tag="抖音最高画质", timeout=20, requires_body=true
 
 [Mitm]
 hostname = *.amemv.com, *.snssdk.com, *.douyin.com, *.iesdouyin.com
