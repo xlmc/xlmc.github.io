@@ -1,5 +1,5 @@
 #!name = 抖音最高画质
-#!desc = 抖音移动端视频优先尝试原画/超高清播放源：使用抖音 play 接口的 ratio=default + improve_bitrate=1；v7 改为非破坏式处理，不删除 bit_rate、不改推荐/分页/主页数据，只在视频播放地址前置原画解析地址，失败时仍保留抖音原始 CDN/ABR 回退。
+#!desc = v8 改为只重写真正的视频播放请求，不再修改 feed/detail 等业务响应。播放 /aweme/v*/play/ 时把 ratio 强制为 default、improve_bitrate=1，并移除固定转码档参数；推荐、分页、评论、主页作品等数据完全不碰。
 #!author = xlmc
 #!homepage = https://github.com/xlmc/xlmc.github.io/tree/main/loon/douyin-max-quality
 #!system = iOS,iPadOS
@@ -8,10 +8,10 @@
 #!type = normal
 
 [Argument]
-enabled = switch,true,tag=抖音视频最高画质,desc=优先原画/超高清源，同时完整保留推荐算法、分页和原生 ABR 候选；评论、主页作品列表等非播放接口不处理
+enabled = switch,true,tag=抖音视频最高画质,desc=仅改实际播放请求为原画/超高清参数，不修改推荐算法、分页、评论或主页数据
 
 [Script]
-response if ${url} ~= /^https:\/\/(?:[^\/]+\.)?(?:amemv\.com|snssdk\.com|douyin\.com|iesdouyin\.com)\/aweme\/v\d+\/(?:feed|aweme\/detail|multi\/aweme\/detail|follow\/feed|nearby\/feed|search\/item|general\/search\/single|hot\/search\/video\/list|aweme\/favorite|mix\/aweme)(?:\/|\?|$)/i then script("https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/douyin-max-quality/douyin-max-quality.js?v=7") with enable=${enabled}, tag="抖音最高画质 v7", timeout=20, requires_body=true
+request if ${url} ~= /^https:\/\/(?:aweme\.snssdk\.com|api\.amemv\.com)\/aweme\/v\d+\/play\/?(?:\?|$)/i then script("https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/douyin-max-quality/douyin-max-quality.js?v=8") with enable=${enabled}, tag="抖音最高画质 v8", timeout=15
 
 [Mitm]
-hostname = *.amemv.com, *.snssdk.com, *.douyin.com, *.iesdouyin.com
+hostname = aweme.snssdk.com, api.amemv.com
