@@ -1,5 +1,6 @@
 // YouTube Max Quality - Player target resolver for Loon
-// Reads /youtubei/v1/player protobuf, finds the highest video resolution and prefers HDR at that resolution.
+// Reads /youtubei/v1/player protobuf and selects the highest official-style quality tier:
+// resolution > HDR > frame rate > bitrate.
 
 (function () {
   const bytes = $response && $response.body;
@@ -115,6 +116,10 @@
   function qp(name) {
     try { return new URL(requestUrl).searchParams.get(name) || ""; } catch (_) { return ""; }
   }
+  function menuLabel(resolution, fps, hdr) {
+    const rate = fps > 30 ? String(Math.round(fps)) : "";
+    return resolution + "p" + rate + (hdr ? " HDR" : "");
+  }
 
   try {
     const all = parsePlayer(bytes);
@@ -126,21 +131,33 @@
 
     const sameResolution = video.filter(f => f.resolution === maxResolution);
     const hdrFormats = sameResolution.filter(f => f.isHdr);
-    const preferredPool = hdrFormats.length ? hdrFormats : sameResolution;
-    const top = preferredPool.sort((a, b) => {
+    const dynamicRangePool = hdrFormats.length ? hdrFormats : sameResolution;
+
+    // Match YouTube's menu semantics: at the same resolution and dynamic range,
+    // prefer the highest frame-rate label (e.g. 2160p60 HDR over 2160p HDR).
+    let maxFps = 0;
+    for (const f of dynamicRangePool) if ((f.fps || 0) > maxFps) maxFps = f.fps || 0;
+    const frameRatePool = dynamicRangePool.filter(f => (f.fps || 0) === maxFps);
+
+    // Same official quality tier: prefer the highest bitrate variant.
+    const top = frameRatePool.sort((a, b) => {
       const abr = (b.averageBitrate || b.bitrate || 0) - (a.averageBitrate || a.bitrate || 0);
       if (abr) return abr;
-      return (b.fps || 0) - (a.fps || 0);
+      return (b.bitrate || 0) - (a.bitrate || 0);
     });
 
     const maxBitrate = top.reduce((m, f) => Math.max(m, f.averageBitrate || f.bitrate || 0), 0);
+    const hdr = hdrFormats.length > 0;
+    const label = menuLabel(maxResolution, maxFps, hdr);
     const target = {
-      version: 7,
+      version: 8,
       videoId: qp("id") || qp("videoId") || "",
       capturedAt: Date.now(),
       resolution: maxResolution,
-      hdr: hdrFormats.length > 0,
-      maxBitrate: maxBitrate,
+      hdr,
+      fps: maxFps,
+      menuLabel: label,
+      maxBitrate,
       allVideoItags: video.map(f => f.itag),
       formats: top.map(f => ({
         itag: f.itag,
@@ -158,7 +175,7 @@
       }))
     };
     $persistentStore.write(JSON.stringify(target), "ytmq.max.target");
-    console.log("[YT Max Quality] target=" + maxResolution + "p" + (target.hdr ? " HDR" : " SDR") + " | preferred itags=" + top.map(f => f.itag).join(",") + " | maxBitrate=" + maxBitrate);
+    console.log("[YT Max Quality] target=" + label + " | preferred itags=" + top.map(f => f.itag).join(",") + " | maxBitrate=" + maxBitrate);
   } catch (e) {
     console.log("[YT Max Quality] player parse error: " + String(e && e.message || e));
   }
