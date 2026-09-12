@@ -1,5 +1,5 @@
 // Douyin Max Quality - Loon response rewriter
-// Keeps only the best advertised video rendition in mobile Aweme JSON responses.
+// Follows Douyin/Aweme's own bitrate ladder: the highest advertised bit_rate wins.
 
 (function () {
   const raw = $response && $response.body;
@@ -22,6 +22,15 @@
     return !!(a && Array.isArray(a.url_list) && a.url_list.length);
   }
 
+  function bitrateOf(f) {
+    return num(f && (f.bit_rate || f.bitrate || f.avg_bitrate || f.average_bitrate || 0));
+  }
+
+  function dataSizeOf(f) {
+    const a = addrOf(f) || {};
+    return num(a.data_size || (f && f.data_size) || 0);
+  }
+
   function parseResolutionToken(s) {
     const m = /(\d{3,4})p/i.exec(text(s));
     return m ? num(m[1]) : 0;
@@ -29,55 +38,23 @@
 
   function resolutionOf(f, video) {
     const a = addrOf(f) || {};
-    const w = num(a.width || f.width || 0);
-    const h = num(a.height || f.height || 0);
+    const w = num(a.width || (f && f.width) || 0);
+    const h = num(a.height || (f && f.height) || 0);
     if (w && h) return Math.min(w, h);
-    return parseResolutionToken(f.gear_name) ||
+    return parseResolutionToken(f && f.gear_name) ||
       parseResolutionToken(a.url_key) ||
-      parseResolutionToken(f.quality_label) ||
       parseResolutionToken(video && video.ratio) || 0;
-  }
-
-  function hdrOf(f, video) {
-    const a = addrOf(f) || {};
-    const hdrType = num(f.HDR_type || f.hdr_type || f.hdrType || 0);
-    const hdrBit = num(f.HDR_bit || f.hdr_bit || f.hdrBit || 0);
-    if (hdrType > 0 || hdrBit > 8) return 1;
-    if (num(video && (video.is_source_HDR || video.is_source_hdr)) > 0) return 1;
-    const s = [f.gear_name, f.format, f.dynamic_range, f.color_space, a.url_key].map(text).join(" ");
-    return /\b(?:hdr|pq|hlg|dolby|dv)\b/i.test(s) ? 1 : 0;
   }
 
   function fpsOf(f) {
     const a = addrOf(f) || {};
-    return num(f.fps || a.fps || 0);
+    return num((f && (f.FPS || f.fps)) || a.fps || 0);
   }
 
-  function bitrateOf(f) {
-    return num(f.bit_rate || f.bitrate || f.avg_bitrate || f.average_bitrate || 0);
-  }
-
-  function sizeOf(f) {
-    const a = addrOf(f) || {};
-    return num(a.data_size || f.data_size || 0);
-  }
-
-  function codecScore(f) {
-    if (num(f.is_h265 || f.is_bytevc1) > 0) return 1;
-    const a = addrOf(f) || {};
-    return /(?:h265|hevc|bytevc1)/i.test(text(a.url_key) + " " + text(f.format)) ? 1 : 0;
-  }
-
-  function rank(f, video) {
-    return [resolutionOf(f, video), hdrOf(f, video), fpsOf(f), bitrateOf(f), codecScore(f), sizeOf(f)];
-  }
-
-  function better(a, b, video) {
-    const ra = rank(a, video), rb = rank(b, video);
-    for (let i = 0; i < ra.length; i++) {
-      if (ra[i] !== rb[i]) return ra[i] > rb[i];
-    }
-    return false;
+  function hdrOf(f) {
+    if (!f) return false;
+    return num(f.HDR_type || f.hdr_type || f.hdrType || 0) > 0 ||
+      num(f.HDR_bit || f.hdr_bit || f.hdrBit || 0) > 8;
   }
 
   function clone(o) {
@@ -89,6 +66,33 @@
     return !!(v && typeof v === "object" && Array.isArray(v.bit_rate) && v.bit_rate.length);
   }
 
+  function pickBest(candidates, video) {
+    // Douyin's own rendition ladder is represented by bit_rate / gear_name / quality_type.
+    // For "最高画质", follow the client-side convention used by mature Aweme tweaks:
+    // select the entry with the highest bit_rate. quality_type is an enum/code, not a
+    // monotonically increasing quality score, so it must not be sorted numerically.
+    let best = candidates[0];
+    let bestBitrate = bitrateOf(best);
+    for (let i = 1; i < candidates.length; i++) {
+      const br = bitrateOf(candidates[i]);
+      if (br > bestBitrate) {
+        best = candidates[i];
+        bestBitrate = br;
+      }
+    }
+
+    // Compatibility fallback for unusual responses where bit_rate is missing/zero.
+    if (bestBitrate <= 0) {
+      for (let i = 1; i < candidates.length; i++) {
+        const a = candidates[i];
+        const b = best;
+        const as = dataSizeOf(a), bs = dataSizeOf(b);
+        if (as > bs || (as === bs && resolutionOf(a, video) > resolutionOf(b, video))) best = a;
+      }
+    }
+    return best;
+  }
+
   let changed = 0;
   const picked = [];
 
@@ -97,12 +101,11 @@
     const candidates = video.bit_rate.filter(f => f && typeof f === "object" && validAddr(addrOf(f)));
     if (!candidates.length) return;
 
-    let best = candidates[0];
-    for (let i = 1; i < candidates.length; i++) if (better(candidates[i], best, video)) best = candidates[i];
-
+    const best = pickBest(candidates, video);
     const bestAddr = clone(addrOf(best));
     if (!validAddr(bestAddr)) return;
 
+    // Make the highest Douyin rendition the default playback address.
     video.play_addr = bestAddr;
     if (num(best.is_h265 || best.is_bytevc1) > 0) {
       if (Object.prototype.hasOwnProperty.call(video, "play_addr_265")) video.play_addr_265 = clone(bestAddr);
@@ -110,7 +113,8 @@
       if (Object.prototype.hasOwnProperty.call(video, "play_addr_h264")) video.play_addr_h264 = clone(bestAddr);
     }
 
-    // Remove lower ABR candidates so the mobile player cannot down-select to them.
+    // Leave the native Douyin rendition object intact, but remove lower ABR choices.
+    // gear_name / quality_type / HDR_type / FPS and other native metadata are preserved.
     video.bit_rate = [best];
 
     const r = resolutionOf(best, video);
@@ -118,11 +122,16 @@
     if (num(bestAddr.width)) video.width = num(bestAddr.width);
     if (num(bestAddr.height)) video.height = num(bestAddr.height);
 
+    const gear = text(best.gear_name) || "unknown";
+    const qualityType = best.quality_type != null ? text(best.quality_type) : "-";
+    const br = bitrateOf(best);
+    const fps = fpsOf(best);
+    picked.push(gear + " | q=" + qualityType +
+      (r ? " | " + r + "p" : "") +
+      (fps ? " | " + fps + "fps" : "") +
+      (hdrOf(best) ? " | HDR" : "") +
+      (br ? " | " + Math.round(br / 1000) + "kbps" : ""));
     changed++;
-    picked.push((best.gear_name || (r ? r + "p" : "unknown")) +
-      (hdrOf(best, video) ? " HDR" : "") +
-      (fpsOf(best) ? " " + fpsOf(best) + "fps" : "") +
-      (bitrateOf(best) ? " " + Math.round(bitrateOf(best) / 1000) + "kbps" : ""));
   }
 
   function walk(node) {
