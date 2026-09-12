@@ -2,7 +2,7 @@
 #!desc = YouTube 官方客户端自动选择当前视频实际可用的最高画质。排序按官方画质菜单语义：分辨率 > HDR > 高帧率 > 码率；例如 2160p60 HDR > 2160p HDR > 2160p60 > 2160p。Premium 账号如实际下发 Enhanced Bitrate，则同一规格优先高码率格式。
 #!author = xlmc
 #!homepage = https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
-#!icon = https://raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/YouTube.png
+#!icon = https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
 #!system = iOS,iPadOS
 #!loon_version = 3.5.1(983)
 #!tag = YouTube,最高画质,HDR,高帧率,SABR
