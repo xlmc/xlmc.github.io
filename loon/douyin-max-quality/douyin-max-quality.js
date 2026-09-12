@@ -1,5 +1,6 @@
 // Douyin Max Quality - Loon response rewriter
-// Follows Douyin/Aweme's own bitrate ladder: the highest advertised bit_rate wins.
+// Prefer Douyin's original/high-bitrate play endpoint (ratio=default + improve_bitrate=1),
+// then fall back to the highest advertised bit_rate rendition.
 
 (function () {
   const raw = $response && $response.body;
@@ -14,12 +15,17 @@
     return v == null ? "" : String(v);
   }
 
-  function addrOf(f) {
-    return (f && (f.play_addr || f.playAddr || f.play_addr_265 || f.play_addr_h264)) || null;
+  function clone(o) {
+    if (!o || typeof o !== "object") return o;
+    try { return JSON.parse(JSON.stringify(o)); } catch (_) { return o; }
   }
 
   function validAddr(a) {
-    return !!(a && Array.isArray(a.url_list) && a.url_list.length);
+    return !!(a && typeof a === "object" && Array.isArray(a.url_list) && a.url_list.length);
+  }
+
+  function addrOf(f) {
+    return (f && (f.play_addr || f.playAddr || f.play_addr_265 || f.play_addr_h264)) || null;
   }
 
   function bitrateOf(f) {
@@ -31,66 +37,75 @@
     return num(a.data_size || (f && f.data_size) || 0);
   }
 
-  function parseResolutionToken(s) {
-    const m = /(\d{3,4})p/i.exec(text(s));
-    return m ? num(m[1]) : 0;
-  }
-
-  function resolutionOf(f, video) {
-    const a = addrOf(f) || {};
-    const w = num(a.width || (f && f.width) || 0);
-    const h = num(a.height || (f && f.height) || 0);
-    if (w && h) return Math.min(w, h);
-    return parseResolutionToken(f && f.gear_name) ||
-      parseResolutionToken(a.url_key) ||
-      parseResolutionToken(video && video.ratio) || 0;
-  }
-
-  function fpsOf(f) {
-    const a = addrOf(f) || {};
-    return num((f && (f.FPS || f.fps)) || a.fps || 0);
-  }
-
-  function hdrOf(f) {
-    if (!f) return false;
-    return num(f.HDR_type || f.hdr_type || f.hdrType || 0) > 0 ||
-      num(f.HDR_bit || f.hdr_bit || f.hdrBit || 0) > 8;
-  }
-
-  function clone(o) {
-    if (!o || typeof o !== "object") return o;
-    try { return JSON.parse(JSON.stringify(o)); } catch (_) { return o; }
-  }
-
   function isVideoObject(v) {
-    return !!(v && typeof v === "object" && Array.isArray(v.bit_rate) && v.bit_rate.length);
+    if (!v || typeof v !== "object") return false;
+    if (validAddr(v.play_addr) && text(v.play_addr.uri)) return true;
+    return Array.isArray(v.bit_rate) && v.bit_rate.some(f => f && typeof f === "object" && validAddr(addrOf(f)));
   }
 
-  function pickBest(candidates, video) {
-    // Douyin's own rendition ladder is represented by bit_rate / gear_name / quality_type.
-    // For "最高画质", follow the client-side convention used by mature Aweme tweaks:
-    // select the entry with the highest bit_rate. quality_type is an enum/code, not a
-    // monotonically increasing quality score, so it must not be sorted numerically.
+  function pickHighestBitrate(candidates) {
+    if (!candidates.length) return null;
     let best = candidates[0];
-    let bestBitrate = bitrateOf(best);
+    let bestBr = bitrateOf(best);
     for (let i = 1; i < candidates.length; i++) {
       const br = bitrateOf(candidates[i]);
-      if (br > bestBitrate) {
+      if (br > bestBr || (br === bestBr && dataSizeOf(candidates[i]) > dataSizeOf(best))) {
         best = candidates[i];
-        bestBitrate = br;
-      }
-    }
-
-    // Compatibility fallback for unusual responses where bit_rate is missing/zero.
-    if (bestBitrate <= 0) {
-      for (let i = 1; i < candidates.length; i++) {
-        const a = candidates[i];
-        const b = best;
-        const as = dataSizeOf(a), bs = dataSizeOf(b);
-        if (as > bs || (as === bs && resolutionOf(a, video) > resolutionOf(b, video))) best = a;
+        bestBr = br;
       }
     }
     return best;
+  }
+
+  function videoIdOf(video, fallbackAddr) {
+    const ids = [
+      video && video.play_addr && video.play_addr.uri,
+      video && video.play_addr_265 && video.play_addr_265.uri,
+      video && video.play_addr_h264 && video.play_addr_h264.uri,
+      fallbackAddr && fallbackAddr.uri,
+      video && video.vid
+    ];
+    for (let i = 0; i < ids.length; i++) {
+      const id = text(ids[i]).trim();
+      if (id) return id;
+    }
+    return "";
+  }
+
+  function uniqueUrls(urls) {
+    const out = [];
+    const seen = Object.create(null);
+    for (let i = 0; i < urls.length; i++) {
+      const u = text(urls[i]).trim();
+      if (!u || seen[u]) continue;
+      seen[u] = 1;
+      out.push(u);
+    }
+    return out;
+  }
+
+  function originalUrls(videoId) {
+    const id = encodeURIComponent(videoId);
+    const common = "video_id=" + id +
+      "&ratio=default" +
+      "&watermark=0" +
+      "&media_type=4" +
+      "&vr_type=0" +
+      "&improve_bitrate=1" +
+      "&is_play_url=1";
+    return [
+      "https://aweme.snssdk.com/aweme/v1/play/?" + common + "&line=0",
+      "https://api.amemv.com/aweme/v1/play/?" + common + "&line=1"
+    ];
+  }
+
+  function makePreferredAddr(baseAddr, videoId) {
+    const out = clone(baseAddr) || {};
+    const fallback = validAddr(baseAddr) ? baseAddr.url_list : [];
+    out.uri = videoId;
+    // High-bitrate/original endpoints first. Existing CDN/play URLs remain as safe fallback.
+    out.url_list = uniqueUrls(originalUrls(videoId).concat(fallback));
+    return out;
   }
 
   let changed = 0;
@@ -98,40 +113,43 @@
 
   function processVideo(video) {
     if (!isVideoObject(video)) return;
-    const candidates = video.bit_rate.filter(f => f && typeof f === "object" && validAddr(addrOf(f)));
-    if (!candidates.length) return;
 
-    const best = pickBest(candidates, video);
-    const bestAddr = clone(addrOf(best));
-    if (!validAddr(bestAddr)) return;
+    const candidates = Array.isArray(video.bit_rate)
+      ? video.bit_rate.filter(f => f && typeof f === "object" && validAddr(addrOf(f)))
+      : [];
+    const best = pickHighestBitrate(candidates);
+    const fallbackAddr = (best && addrOf(best)) || video.play_addr || video.play_addr_265 || video.play_addr_h264;
+    if (!validAddr(fallbackAddr)) return;
 
-    // Make the highest Douyin rendition the default playback address.
-    video.play_addr = bestAddr;
-    if (num(best.is_h265 || best.is_bytevc1) > 0) {
-      if (Object.prototype.hasOwnProperty.call(video, "play_addr_265")) video.play_addr_265 = clone(bestAddr);
-    } else {
-      if (Object.prototype.hasOwnProperty.call(video, "play_addr_h264")) video.play_addr_h264 = clone(bestAddr);
+    const videoId = videoIdOf(video, fallbackAddr);
+    if (!videoId) return;
+
+    const preferredAddr = makePreferredAddr(fallbackAddr, videoId);
+    if (!validAddr(preferredAddr)) return;
+
+    // Force the player toward the original/high-bitrate resolver while keeping native fallback URLs.
+    video.play_addr = clone(preferredAddr);
+    if (Object.prototype.hasOwnProperty.call(video, "play_addr_265")) video.play_addr_265 = clone(preferredAddr);
+    if (Object.prototype.hasOwnProperty.call(video, "play_addr_h264")) video.play_addr_h264 = clone(preferredAddr);
+
+    // Keep one native rendition object so ABR cannot immediately down-select to lower ladders.
+    // Only its playback address is redirected to the original/high-bitrate resolver; all native
+    // gear_name / quality_type / codec / HDR / FPS metadata remains untouched.
+    if (best) {
+      const preferred = clone(best);
+      if (preferred.play_addr) preferred.play_addr = clone(preferredAddr);
+      else if (preferred.playAddr) preferred.playAddr = clone(preferredAddr);
+      else preferred.play_addr = clone(preferredAddr);
+      if (preferred.play_addr_265) preferred.play_addr_265 = clone(preferredAddr);
+      if (preferred.play_addr_h264) preferred.play_addr_h264 = clone(preferredAddr);
+      video.bit_rate = [preferred];
     }
 
-    // Leave the native Douyin rendition object intact, but remove lower ABR choices.
-    // gear_name / quality_type / HDR_type / FPS and other native metadata are preserved.
-    video.bit_rate = [best];
-
-    const r = resolutionOf(best, video);
-    if (r) video.ratio = r + "p";
-    if (num(bestAddr.width)) video.width = num(bestAddr.width);
-    if (num(bestAddr.height)) video.height = num(bestAddr.height);
-
-    const gear = text(best.gear_name) || "unknown";
-    const qualityType = best.quality_type != null ? text(best.quality_type) : "-";
-    const br = bitrateOf(best);
-    const fps = fpsOf(best);
-    picked.push(gear + " | q=" + qualityType +
-      (r ? " | " + r + "p" : "") +
-      (fps ? " | " + fps + "fps" : "") +
-      (hdrOf(best) ? " | HDR" : "") +
-      (br ? " | " + Math.round(br / 1000) + "kbps" : ""));
     changed++;
+    picked.push("uri=" + videoId +
+      " | original/default" +
+      (best ? " | fallback=" + (text(best.gear_name) || "highest-bitrate") : "" ) +
+      (best && bitrateOf(best) ? " | " + Math.round(bitrateOf(best) / 1000) + "kbps" : ""));
   }
 
   function walk(node) {
@@ -153,10 +171,10 @@
     const data = JSON.parse(raw);
     walk(data);
     if (!changed) { $done({}); return; }
-    console.log("[抖音最高画质] rewritten=" + changed + " | " + picked.slice(0, 8).join(" ; "));
+    console.log("[抖音最高画质 v5] original-priority=" + changed + " | " + picked.slice(0, 8).join(" ; "));
     $done({ body: JSON.stringify(data) });
   } catch (e) {
-    console.log("[抖音最高画质] pass-through: " + String(e && e.message || e));
+    console.log("[抖音最高画质 v5] pass-through: " + String(e && e.message || e));
     $done({});
   }
 })();
