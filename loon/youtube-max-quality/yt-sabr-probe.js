@@ -1,240 +1,124 @@
-// YouTube SABR full request capture for Loon
-// Read-only. Decodes VideoPlaybackAbrRequest format selections and ABR state, and caches raw protobuf locally.
+// YouTube Max Quality - SABR request rewriter for Loon
+// Forces the highest resolution advertised by the latest /player response.
 
 (function () {
-  const url = ($request && $request.url) || "";
-  const method = ($request && $request.method) || "UNKNOWN";
-  const headers = ($request && $request.headers) || {};
   const body = $request && $request.body;
+  const url = ($request && $request.url) || "";
+  const method = ($request && $request.method) || "";
+  let isSabr = false;
+  try { isSabr = new URL(url).searchParams.get("sabr") === "1"; } catch (_) {}
+  if (method.toUpperCase() !== "POST" || !isSabr || !(body instanceof Uint8Array) || !body.length || !/\/videoplayback(?:\?|\/|$)/i.test(url)) { $done({}); return; }
 
-  function qp(name) {
-    try { return new URL(url).searchParams.get(name) || ""; } catch (_) { return ""; }
-  }
-
-  function toBase64(input) {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let out = "";
-    for (let i = 0; i < input.length; i += 3) {
-      const a = input[i], b = i + 1 < input.length ? input[i + 1] : 0, c = i + 2 < input.length ? input[i + 2] : 0;
-      const n = (a << 16) | (b << 8) | c;
-      out += chars[(n >>> 18) & 63] + chars[(n >>> 12) & 63] + (i + 1 < input.length ? chars[(n >>> 6) & 63] : "=") + (i + 2 < input.length ? chars[n & 63] : "=");
-    }
-    return out;
-  }
-
-  function fnv1a(input) {
-    let h = 2166136261 >>> 0;
-    for (let i = 0; i < input.length; i++) { h ^= input[i]; h = Math.imul(h, 16777619) >>> 0; }
-    return ("00000000" + h.toString(16)).slice(-8);
+  let target = null;
+  try { target = JSON.parse($persistentStore.read("ytmq.max.target") || "null"); } catch (_) {}
+  if (!target || !target.resolution || !Array.isArray(target.formats) || !target.formats.length || Date.now() - (target.capturedAt || 0) > 10 * 60 * 1000) {
+    $done({}); return;
   }
 
   function readVarint(buf, pos, end) {
     let value = 0, mul = 1, count = 0;
     while (pos < end && count < 10) {
-      const b = buf[pos++];
-      value += (b & 0x7f) * mul;
+      const b = buf[pos++]; value += (b & 0x7f) * mul;
       if (b < 0x80) return [value, pos];
-      mul *= 128;
-      count++;
+      mul *= 128; count++;
     }
     throw new Error("bad varint");
   }
-
   function readBytes(buf, pos, end) {
     const r = readVarint(buf, pos, end), len = r[0], start = r[1], finish = start + len;
-    if (finish > end) throw new Error("truncated length-delimited field");
+    if (finish > end) throw new Error("truncated field");
     return [start, finish, finish];
   }
-
-  function skipField(buf, pos, end, wire) {
-    if (wire === 0) return readVarint(buf, pos, end)[1];
-    if (wire === 1) return Math.min(pos + 8, end);
-    if (wire === 2) return readBytes(buf, pos, end)[2];
-    if (wire === 5) return Math.min(pos + 4, end);
-    throw new Error("unsupported wire type " + wire);
-  }
-
-  function utf8(buf, start, end) {
-    try { return new TextDecoder("utf-8").decode(buf.slice(start, end)); }
-    catch (_) {
-      let s = "";
-      for (let i = start; i < end; i++) s += String.fromCharCode(buf[i]);
-      return s;
-    }
-  }
-
-  function parseFormatId(buf, start, end) {
-    const out = { itag: 0, xtags: "" };
+  function parseFields(buf, start, end) {
+    const fields = [];
     let p = start;
     while (p < end) {
-      const tr = readVarint(buf, p, end); const tag = tr[0]; p = tr[1];
+      const fieldStart = p, tr = readVarint(buf, p, end), tag = tr[0]; p = tr[1];
       const field = Math.floor(tag / 8), wire = tag & 7;
-      if (field === 1 && wire === 0) { const r = readVarint(buf, p, end); out.itag = r[0]; p = r[1]; }
-      else if (field === 3 && wire === 2) { const r = readBytes(buf, p, end); out.xtags = utf8(buf, r[0], r[1]); p = r[2]; }
-      else p = skipField(buf, p, end, wire);
+      let dataStart = -1, dataEnd = -1, value = null;
+      if (wire === 0) { const r = readVarint(buf, p, end); value = r[0]; p = r[1]; }
+      else if (wire === 1) p = Math.min(p + 8, end);
+      else if (wire === 2) { const r = readBytes(buf, p, end); dataStart = r[0]; dataEnd = r[1]; p = r[2]; }
+      else if (wire === 5) p = Math.min(p + 4, end);
+      else throw new Error("unsupported wire type " + wire);
+      fields.push({ field, wire, value, dataStart, dataEnd, raw: buf.slice(fieldStart, p) });
     }
+    return fields;
+  }
+  function encVarint(n) {
+    n = Math.max(0, Math.floor(Number(n) || 0));
+    const a = [];
+    while (n >= 128) { a.push((n % 128) + 128); n = Math.floor(n / 128); }
+    a.push(n); return new Uint8Array(a);
+  }
+  function concat(chunks) {
+    let len = 0; for (const c of chunks) len += c.length;
+    const out = new Uint8Array(len); let p = 0;
+    for (const c of chunks) { out.set(c, p); p += c.length; }
     return out;
   }
-
-  function parseFormatGroup(buf, start, end) {
-    const ids = [];
-    let p = start;
-    while (p < end) {
-      const tr = readVarint(buf, p, end); const tag = tr[0]; p = tr[1];
-      const field = Math.floor(tag / 8), wire = tag & 7;
-      if (field === 1 && wire === 2) {
-        const r = readBytes(buf, p, end); ids.push(parseFormatId(buf, r[0], r[1])); p = r[2];
-      } else p = skipField(buf, p, end, wire);
-    }
-    return ids;
+  function varField(field, value) { return concat([encVarint(field * 8), encVarint(value)]); }
+  function bytesField(field, payload) { return concat([encVarint(field * 8 + 2), encVarint(payload.length), payload]); }
+  function utf8(s) {
+    if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(s || "");
+    const str = unescape(encodeURIComponent(s || "")), out = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i); return out;
   }
-
-  function parseClientAbrState(buf, start, end) {
-    const wanted = {
-      16: "lastManualSelectedResolution",
-      18: "viewportWidth",
-      19: "viewportHeight",
-      20: "bitrateCapBytesPerSec",
-      21: "stickyResolution",
-      23: "bandwidthEstimate",
-      26: "videoQualitySetting",
-      28: "playerTimeMs",
-      30: "dataSaverMode",
-      32: "networkMeteredState",
-      58: "preferVp9",
-      59: "av1QualityThreshold",
-      62: "sabrSupportQualityConstraints"
+  function formatIdMessage(f) {
+    const chunks = [varField(1, f.itag)];
+    if (f.lastModified) chunks.push(varField(2, f.lastModified));
+    if (f.xtags) chunks.push(bytesField(3, utf8(f.xtags)));
+    return concat(chunks);
+  }
+  function rewriteAbrState(payload) {
+    const fields = parseFields(payload, 0, payload.length);
+    const desiredBandwidth = Math.max(100000000, (target.maxBitrate || 0) * 4);
+    const replacements = {
+      13: 0,
+      16: target.resolution,
+      20: 0,
+      21: target.resolution,
+      23: desiredBandwidth,
+      26: 3,
+      30: 0
     };
-    const out = {};
-    let p = start;
-    while (p < end) {
-      const tr = readVarint(buf, p, end); const tag = tr[0]; p = tr[1];
-      const field = Math.floor(tag / 8), wire = tag & 7;
-      if (wanted[field] && wire === 0) {
-        const r = readVarint(buf, p, end); out[wanted[field]] = r[0]; p = r[1];
-      } else if (field === 79 && wire === 2) {
-        const r = readBytes(buf, p, end); out.playbackAuthorizationBytes = r[1] - r[0]; p = r[2];
-      } else p = skipField(buf, p, end, wire);
+    const done = Object.create(null), chunks = [];
+    for (const f of fields) {
+      if (Object.prototype.hasOwnProperty.call(replacements, f.field) && f.wire === 0) {
+        if (!done[f.field]) { chunks.push(varField(f.field, replacements[f.field])); done[f.field] = true; }
+      } else chunks.push(f.raw);
     }
-    if (out.videoQualitySetting != null) {
-      const names = {0:"UNKNOWN",1:"HIGHER_QUALITY",2:"DATA_SAVER",3:"ADVANCED_MENU"};
-      out.videoQualitySettingName = names[out.videoQualitySetting] || String(out.videoQualitySetting);
+    for (const k of Object.keys(replacements)) {
+      const n = Number(k); if (!done[n]) chunks.push(varField(n, replacements[n]));
     }
-    out.dataSaverMode = !!out.dataSaverMode;
-    out.preferVp9 = !!out.preferVp9;
-    out.sabrSupportQualityConstraints = !!out.sabrSupportQualityConstraints;
-    return out;
+    return concat(chunks);
   }
-
-  function parseAbrRequest(buf) {
-    const out = {
-      selectedFormatIds: [],
-      preferredAudioFormatIds: [],
-      preferredVideoFormatIds: [],
-      preferredSubtitleFormatIds: [],
-      formatGroups: [],
-      playerTimeMs: 0,
-      ustreamerConfigBytes: 0,
-      streamerContextBytes: 0,
-      clientAbrState: {}
-    };
-    let p = 0, end = buf.length;
-    while (p < end) {
-      const tr = readVarint(buf, p, end); const tag = tr[0]; p = tr[1];
-      const field = Math.floor(tag / 8), wire = tag & 7;
-      if (field === 1 && wire === 2) {
-        const r = readBytes(buf, p, end); out.clientAbrState = parseClientAbrState(buf, r[0], r[1]); p = r[2];
-      } else if (field === 2 && wire === 2) {
-        const r = readBytes(buf, p, end); out.selectedFormatIds.push(parseFormatId(buf, r[0], r[1])); p = r[2];
-      } else if (field === 4 && wire === 0) {
-        const r = readVarint(buf, p, end); out.playerTimeMs = r[0]; p = r[1];
-      } else if (field === 5 && wire === 2) {
-        const r = readBytes(buf, p, end); out.ustreamerConfigBytes = r[1] - r[0]; p = r[2];
-      } else if (field === 16 && wire === 2) {
-        const r = readBytes(buf, p, end); out.preferredAudioFormatIds.push(parseFormatId(buf, r[0], r[1])); p = r[2];
-      } else if (field === 17 && wire === 2) {
-        const r = readBytes(buf, p, end); out.preferredVideoFormatIds.push(parseFormatId(buf, r[0], r[1])); p = r[2];
-      } else if (field === 18 && wire === 2) {
-        const r = readBytes(buf, p, end); out.preferredSubtitleFormatIds.push(parseFormatId(buf, r[0], r[1])); p = r[2];
-      } else if (field === 19 && wire === 2) {
-        const r = readBytes(buf, p, end); out.streamerContextBytes = r[1] - r[0]; p = r[2];
-      } else if (field === 1000 && wire === 2) {
-        const r = readBytes(buf, p, end); out.formatGroups.push(parseFormatGroup(buf, r[0], r[1])); p = r[2];
-      } else p = skipField(buf, p, end, wire);
+  function rewriteRequest(buf) {
+    const fields = parseFields(buf, 0, buf.length), chunks = [];
+    let wrotePreferredVideo = false, changedState = false;
+    for (const f of fields) {
+      if (f.field === 1 && f.wire === 2) {
+        const payload = buf.slice(f.dataStart, f.dataEnd);
+        chunks.push(bytesField(1, rewriteAbrState(payload)));
+        changedState = true;
+      } else if (f.field === 17 && f.wire === 2) {
+        if (!wrotePreferredVideo) {
+          for (const fmt of target.formats) chunks.push(bytesField(17, formatIdMessage(fmt)));
+          wrotePreferredVideo = true;
+        }
+      } else chunks.push(f.raw);
     }
-    return out;
+    if (!changedState) chunks.push(bytesField(1, rewriteAbrState(new Uint8Array(0))));
+    if (!wrotePreferredVideo) for (const fmt of target.formats) chunks.push(bytesField(17, formatIdMessage(fmt)));
+    return concat(chunks);
   }
 
-  function compactFormats(list) {
-    return (list || []).filter(x => x && x.itag).map(x => x.itag + (x.xtags ? "[" + x.xtags + "]" : ""));
+  try {
+    const out = rewriteRequest(body);
+    console.log("[YT Max Quality] forced=" + target.resolution + "p | preferred itags=" + target.formats.map(f => f.itag).join(",") + " | body=" + body.length + "->" + out.length);
+    $done({ body: out });
+  } catch (e) {
+    console.log("[YT Max Quality] SABR rewrite error: " + String(e && e.message || e));
+    $done({});
   }
-
-  const isBinary = body instanceof Uint8Array;
-  const kind = /\/initplayback(?:\?|$)/i.test(url) ? "initplayback" : (/\/videoplayback(?:\?|\/|$)/i.test(url) ? "videoplayback" : "other");
-  const safeQuery = {
-    source: qp("source"), sabr: qp("sabr"), c: qp("c"), cver: qp("cver"),
-    svpuc: qp("svpuc"), rqh: qp("rqh"), itag: qp("itag"), mime: qp("mime")
-  };
-  const contentType = headers["Content-Type"] || headers["content-type"] || "";
-  let parsed = null, parseError = "";
-  if (isBinary && body.length) {
-    try { parsed = parseAbrRequest(body); } catch (e) { parseError = String(e && e.message || e); }
-  }
-
-  const hash = isBinary ? fnv1a(body) : "none";
-  const summary = {
-    version: 4,
-    capturedAt: Date.now(),
-    kind,
-    method,
-    contentType,
-    bodyBytes: isBinary ? body.length : (body ? String(body).length : 0),
-    bodyHash: hash,
-    query: safeQuery,
-    parsed,
-    parseError
-  };
-
-  let captures = [];
-  try { captures = JSON.parse($persistentStore.read("ytmq.sabr.meta") || "[]"); } catch (_) {}
-  const exists = captures.some(x => x.bodyHash === hash && x.kind === kind);
-  let rawSaved = false;
-  if (!exists) {
-    if (captures.length >= 8) captures.shift();
-    captures.push(summary);
-    $persistentStore.write(JSON.stringify(captures), "ytmq.sabr.meta");
-    if (isBinary) {
-      const slot = captures.length - 1;
-      rawSaved = $persistentStore.write(toBase64(body), "ytmq.sabr.raw." + slot);
-    }
-  }
-
-  const sel = parsed ? compactFormats(parsed.selectedFormatIds) : [];
-  const prefV = parsed ? compactFormats(parsed.preferredVideoFormatIds) : [];
-  const prefA = parsed ? compactFormats(parsed.preferredAudioFormatIds) : [];
-  const st = parsed ? parsed.clientAbrState || {} : {};
-
-  console.log(
-    "[YT Capture / SABR v4]\n" +
-    "kind=" + kind + " | method=" + method + " | body=" + summary.bodyBytes + " | hash=" + hash + " | rawSaved=" + rawSaved + "\n" +
-    "client=" + (safeQuery.c || "-") + "/" + (safeQuery.cver || "-") + " | sabr=" + (safeQuery.sabr || "-") + " | source=" + (safeQuery.source || "-") + "\n" +
-    "selected itags=" + (sel.length ? sel.join(", ") : "NONE") + "\n" +
-    "preferred VIDEO itags=" + (prefV.length ? prefV.join(", ") : "NONE") + "\n" +
-    "preferred AUDIO itags=" + (prefA.length ? prefA.join(", ") : "NONE") + "\n" +
-    "ABR: qualityMode=" + (st.videoQualitySettingName || "-") +
-    " | manualRes=" + (st.lastManualSelectedResolution || 0) +
-    " | stickyRes=" + (st.stickyResolution || 0) +
-    " | viewport=" + (st.viewportWidth || 0) + "x" + (st.viewportHeight || 0) +
-    " | bandwidth=" + (st.bandwidthEstimate || 0) +
-    " | bitrateCapBps=" + (st.bitrateCapBytesPerSec || 0) +
-    " | dataSaver=" + (!!st.dataSaverMode) +
-    " | preferVp9=" + (!!st.preferVp9) +
-    " | av1Threshold=" + (st.av1QualityThreshold || 0) +
-    " | qualityConstraints=" + (!!st.sabrSupportQualityConstraints) +
-    " | authBytes=" + (st.playbackAuthorizationBytes || 0) +
-    (parseError ? "\nparseError=" + parseError : "") +
-    "\nSensitive signed URL/token/IP fields intentionally omitted."
-  );
-
-  $done({});
 })();
