@@ -1,5 +1,5 @@
 // YouTube Max Quality - Player target resolver for Loon
-// Reads /youtubei/v1/player protobuf, finds the highest video resolution and caches the matching format IDs.
+// Reads /youtubei/v1/player protobuf, finds the highest video resolution and prefers HDR at that resolution.
 
 (function () {
   const bytes = $response && $response.body;
@@ -37,8 +37,25 @@
       return s;
     }
   }
+  function parseColorInfo(buf, start, end) {
+    const out = { primaries: 0, transfer: 0, matrix: 0 };
+    let p = start;
+    while (p < end) {
+      const tr = readVarint(buf, p, end), tag = tr[0]; p = tr[1];
+      const field = Math.floor(tag / 8), wire = tag & 7;
+      if (wire === 0 && (field === 1 || field === 2 || field === 3)) {
+        const r = readVarint(buf, p, end), v = r[0]; p = r[1];
+        if (field === 1) out.primaries = v;
+        else if (field === 2) out.transfer = v;
+        else if (field === 3) out.matrix = v;
+      } else p = skipField(buf, p, end, wire);
+    }
+    // YouTube/ISO values: BT.2020 primaries=9; BT.2020-10=14, PQ/ST2084=16, HLG=18.
+    out.isHdr = out.primaries === 9 && (out.transfer === 14 || out.transfer === 16 || out.transfer === 18);
+    return out;
+  }
   function parseFormat(buf, start, end) {
-    const out = { itag: 0, mimeType: "", bitrate: 0, averageBitrate: 0, width: 0, height: 0, fps: 0, qualityLabel: "", xtags: "", lastModified: 0 };
+    const out = { itag: 0, mimeType: "", bitrate: 0, averageBitrate: 0, width: 0, height: 0, fps: 0, qualityLabel: "", xtags: "", lastModified: 0, colorInfo: null, isHdr: false };
     let p = start;
     while (p < end) {
       const tr = readVarint(buf, p, end), tag = tr[0]; p = tr[1];
@@ -52,15 +69,21 @@
         else if (field === 11) out.lastModified = v;
         else if (field === 25) out.fps = v;
         else if (field === 31) out.averageBitrate = v;
-      } else if (wire === 2 && (field === 5 || field === 23 || field === 26)) {
-        const r = readBytes(buf, p, end), s = utf8(buf, r[0], r[1]); p = r[2];
-        if (field === 5) out.mimeType = s;
-        else if (field === 23) out.xtags = s;
-        else if (field === 26) out.qualityLabel = s;
+      } else if (wire === 2 && (field === 5 || field === 23 || field === 26 || field === 33)) {
+        const r = readBytes(buf, p, end); p = r[2];
+        if (field === 5) out.mimeType = utf8(buf, r[0], r[1]);
+        else if (field === 23) out.xtags = utf8(buf, r[0], r[1]);
+        else if (field === 26) out.qualityLabel = utf8(buf, r[0], r[1]);
+        else if (field === 33) {
+          out.colorInfo = parseColorInfo(buf, r[0], r[1]);
+          out.isHdr = !!out.colorInfo.isHdr;
+        }
       } else p = skipField(buf, p, end, wire);
     }
     const q = /([0-9]{3,4})p/i.exec(out.qualityLabel || "");
     out.resolution = q ? parseInt(q[1], 10) : ((out.width && out.height) ? Math.min(out.width, out.height) : (out.height || out.width || 0));
+    // Compatibility fallback for legacy VP9.2 HDR itags if ColorInfo is absent.
+    if (!out.isHdr && out.itag >= 330 && out.itag <= 337) out.isHdr = true;
     return out;
   }
   function parseStreamingData(buf, start, end) {
@@ -100,17 +123,23 @@
 
     let maxResolution = 0;
     for (const f of video) if (f.resolution > maxResolution) maxResolution = f.resolution;
-    const top = video.filter(f => f.resolution === maxResolution).sort((a, b) => {
+
+    const sameResolution = video.filter(f => f.resolution === maxResolution);
+    const hdrFormats = sameResolution.filter(f => f.isHdr);
+    const preferredPool = hdrFormats.length ? hdrFormats : sameResolution;
+    const top = preferredPool.sort((a, b) => {
       const abr = (b.averageBitrate || b.bitrate || 0) - (a.averageBitrate || a.bitrate || 0);
       if (abr) return abr;
       return (b.fps || 0) - (a.fps || 0);
     });
+
     const maxBitrate = top.reduce((m, f) => Math.max(m, f.averageBitrate || f.bitrate || 0), 0);
     const target = {
-      version: 6,
+      version: 7,
       videoId: qp("id") || qp("videoId") || "",
       capturedAt: Date.now(),
       resolution: maxResolution,
+      hdr: hdrFormats.length > 0,
       maxBitrate: maxBitrate,
       allVideoItags: video.map(f => f.itag),
       formats: top.map(f => ({
@@ -123,11 +152,13 @@
         height: f.height || 0,
         fps: f.fps || 0,
         qualityLabel: f.qualityLabel || "",
-        mimeType: f.mimeType || ""
+        mimeType: f.mimeType || "",
+        isHdr: !!f.isHdr,
+        colorInfo: f.colorInfo || null
       }))
     };
     $persistentStore.write(JSON.stringify(target), "ytmq.max.target");
-    console.log("[YT Max Quality] target=" + maxResolution + "p | itags=" + top.map(f => f.itag).join(",") + " | maxBitrate=" + maxBitrate);
+    console.log("[YT Max Quality] target=" + maxResolution + "p" + (target.hdr ? " HDR" : " SDR") + " | preferred itags=" + top.map(f => f.itag).join(",") + " | maxBitrate=" + maxBitrate);
   } catch (e) {
     console.log("[YT Max Quality] player parse error: " + String(e && e.message || e));
   }
