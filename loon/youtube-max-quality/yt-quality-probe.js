@@ -33,7 +33,7 @@
   const strings = extractAsciiStrings(bytes, 4);
   const interesting = [];
   const seen = Object.create(null);
-  const matcher = /(1080p\s*Premium|Premium|enhanced\s*bitrate|4320p|2160p|1440p|1080p|720p|qualityLabel|video\/|vp9|av01)/i;
+  const matcher = /(1080p\s*Premium|Premium|enhanced\s*bitrate|premium_upsell|paygated|4320p|2160p|1440p|1080p|720p|qualityLabel|video\/|vp9|av01|itag)/i;
 
   for (let i = 0; i < strings.length; i++) {
     const s = strings[i];
@@ -43,12 +43,14 @@
         seen[clipped] = true;
         interesting.push(clipped);
       }
-      if (interesting.length >= 40) break;
+      if (interesting.length >= 50) break;
     }
   }
 
   const joined = interesting.join("\n---\n");
-  const premium = /(1080p\s*Premium|enhanced\s*bitrate|Premium)/i.test(joined);
+  const premiumUi = /(1080p\s*Premium|enhanced\s*bitrate|YouTube\s*Premium)/i.test(joined);
+  const upsell = /(premium_upsell|paygated)/i.test(joined);
+  const accessEvidence = premiumUi && !upsell ? "UNKNOWN" : "NO";
   const levels = ["4320p", "2160p", "1440p", "1080p", "720p"].filter(function (q) {
     return joined.indexOf(q) !== -1;
   });
@@ -57,18 +59,22 @@
     "[YT Max Quality Probe]\n" +
     "URL: " + url + "\n" +
     "Body: " + bytes.length + " bytes\n" +
-    "Premium marker: " + (premium ? "YES" : "NO") + "\n" +
+    "Premium UI marker: " + (premiumUi ? "YES" : "NO") + "\n" +
+    "Premium upsell/paygate marker: " + (upsell ? "YES" : "NO") + "\n" +
+    "Premium stream access evidence: " + accessEvidence + "\n" +
     "Quality markers: " + (levels.length ? levels.join(", ") : "NONE") + "\n" +
     "Matches:\n" + (joined || "NONE")
   );
 
-  if (notify && (premium || levels.length)) {
+  if (notify && (premiumUi || levels.length)) {
+    const subtitle = upsell ? "检测到 Premium 付费/升级标记" : (premiumUi ? "检测到 Premium UI 标记" : "检测到画质标记");
     $notification.post(
       "YouTube 画质探测",
-      premium ? "检测到 Premium 标记" : "检测到画质标记",
-      "Premium: " + (premium ? "YES" : "NO") + " | " +
-      "画质: " + (levels.length ? levels.join(", ") : "未识别") +
-      "\n打开 Loon 日志查看详细结果。",
+      subtitle,
+      "Premium UI: " + (premiumUi ? "YES" : "NO") +
+      " | Upsell: " + (upsell ? "YES" : "NO") +
+      " | 画质: " + (levels.length ? levels.join(", ") : "未识别") +
+      "\n是否存在可播放 Premium 流仍需解析 streamingData。",
       null,
       0
     );
