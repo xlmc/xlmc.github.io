@@ -1,0 +1,11 @@
+#!name=抖音最高画质
+#!desc=Shadowrocket 模块：强制抖音移动端优先使用接口实际下发的最高视频规格。排序：分辨率 > HDR > 高帧率 > 码率；通过重写视频 bit_rate/play_addr，移除低清 ABR 候选。
+#!author=xlmc
+#!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/shadowrocket/douyin-max-quality
+#!category=抖音
+
+[Script]
+抖音最高画质 = type=http-response,pattern=^https:\/\/(?:[^\/]+\.)?(?:amemv\.com|snssdk\.com)\/aweme\/v\d+\/(?:feed|aweme\/detail|multi\/aweme\/detail|aweme\/post|follow\/feed|nearby\/feed|search\/item|general\/search\/single|hot\/search\/video\/list|aweme\/favorite|mix\/aweme)(?:\/|\?),requires-body=1,max-size=-1,timeout=15,script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/shadowrocket/douyin-max-quality/douyin-max-quality.js?v=1
+
+[MITM]
+hostname = %APPEND% *.amemv.com, *.snssdk.com
