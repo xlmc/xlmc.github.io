@@ -1,84 +1,89 @@
-// Douyin Max Quality - Loon request rewriter v8
-// Do not touch feed/detail JSON. Only rewrite the actual /aweme/v*/play/ request
-// so recommendation, pagination, comments and profile payloads stay byte-for-byte original.
+// Douyin Max Quality - Loon request rewriter v9
+// Do NOT mutate Douyin's signed /play/ query. Resolve a clean ratio=default URL
+// with a side-channel HEAD request, then redirect to the returned signed CDN URL.
+// On any failure, leave the original app request byte-for-byte unchanged.
 
 (function () {
   const raw = $request && $request.url;
   if (!raw || typeof raw !== "string") { $done({}); return; }
 
-  function manualRewrite(input) {
-    const hashPos = input.indexOf("#");
-    const hash = hashPos >= 0 ? input.slice(hashPos) : "";
-    const main = hashPos >= 0 ? input.slice(0, hashPos) : input;
-    const qPos = main.indexOf("?");
-    const base = qPos >= 0 ? main.slice(0, qPos) : main;
-    const query = qPos >= 0 ? main.slice(qPos + 1) : "";
-    const parts = query ? query.split("&") : [];
-    const kept = [];
-    let hasRatio = false, hasImprove = false, hasWatermark = false;
-
-    for (let i = 0; i < parts.length; i++) {
-      if (!parts[i]) continue;
-      const eq = parts[i].indexOf("=");
-      const rawKey = eq >= 0 ? parts[i].slice(0, eq) : parts[i];
-      let key = rawKey;
-      try { key = decodeURIComponent(rawKey); } catch (_) {}
-      const lower = key.toLowerCase();
-
-      // These pin a specific transcoded ladder and can defeat ratio=default.
-      if (lower === "quality_type" || /^adapt\d+$/.test(lower)) continue;
-
-      if (lower === "ratio") {
-        if (!hasRatio) kept.push(rawKey + "=default");
-        hasRatio = true;
-        continue;
+  function header(headers, name) {
+    if (!headers) return "";
+    const target = String(name).toLowerCase();
+    for (const k in headers) {
+      if (Object.prototype.hasOwnProperty.call(headers, k) && String(k).toLowerCase() === target) {
+        return String(headers[k] == null ? "" : headers[k]);
       }
-      if (lower === "improve_bitrate") {
-        if (!hasImprove) kept.push(rawKey + "=1");
-        hasImprove = true;
-        continue;
-      }
-      if (lower === "watermark") {
-        if (!hasWatermark) kept.push(rawKey + "=0");
-        hasWatermark = true;
-        continue;
-      }
-      kept.push(parts[i]);
     }
+    return "";
+  }
 
-    if (!hasRatio) kept.push("ratio=default");
-    if (!hasImprove) kept.push("improve_bitrate=1");
-    if (!hasWatermark) kept.push("watermark=0");
-    return base + "?" + kept.join("&") + hash;
+  function queryValue(url, name) {
+    try {
+      const u = new URL(url);
+      return u.searchParams.get(name) || "";
+    } catch (_) {
+      const q = url.split("?")[1] || "";
+      const h = q.split("#")[0];
+      const parts = h ? h.split("&") : [];
+      for (let i = 0; i < parts.length; i++) {
+        const p = parts[i].split("=");
+        let k = p[0] || "";
+        try { k = decodeURIComponent(k); } catch (_) {}
+        if (k === name) {
+          let v = p.slice(1).join("=");
+          try { v = decodeURIComponent(v); } catch (_) {}
+          return v;
+        }
+      }
+      return "";
+    }
   }
 
   try {
-    if (!/\/aweme\/v\d+\/play\/?(?:\?|$)/i.test(raw)) { $done({}); return; }
-
-    let next = raw;
-    try {
-      const u = new URL(raw);
-      if (!u.searchParams.get("video_id")) { $done({}); return; }
-      u.searchParams.set("ratio", "default");
-      u.searchParams.set("improve_bitrate", "1");
-      u.searchParams.set("watermark", "0");
-      u.searchParams.delete("quality_type");
-
-      const keys = [];
-      u.searchParams.forEach(function (_, key) { keys.push(key); });
-      for (let i = 0; i < keys.length; i++) {
-        if (/^adapt\d+$/i.test(keys[i])) u.searchParams.delete(keys[i]);
-      }
-      next = u.toString();
-    } catch (_) {
-      next = manualRewrite(raw);
+    if (!/^https:\/\/(?:aweme\.snssdk\.com|api\.amemv\.com)\/aweme\/v\d+\/play\/?(?:\?|$)/i.test(raw)) {
+      $done({}); return;
     }
 
-    if (next === raw) { $done({}); return; }
-    console.log("[抖音最高画质 v8] playback request -> ratio=default, improve_bitrate=1");
-    $done({ url: next });
+    // Prevent a possible recursive interception of the probe request itself.
+    if (queryValue(raw, "__loon_dyhq_probe") === "1") { $done({}); return; }
+
+    const videoId = queryValue(raw, "video_id");
+    if (!videoId) { $done({}); return; }
+
+    const ua = header($request.headers, "User-Agent") ||
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
+
+    const resolver = "https://aweme.snssdk.com/aweme/v1/play/?video_id=" +
+      encodeURIComponent(videoId) +
+      "&ratio=default&line=0&__loon_dyhq_probe=1";
+
+    $httpClient.head({
+      url: resolver,
+      timeout: 1800,
+      headers: { "User-Agent": ua, "Accept": "*/*" },
+      "auto-redirect": false
+    }, function (error, response) {
+      if (error || !response) {
+        console.log("[抖音最高画质 v9] UHD probe failed; keep original request");
+        $done({});
+        return;
+      }
+
+      const status = Number(response.status || 0);
+      const location = header(response.headers, "Location");
+      if (status >= 300 && status < 400 && /^https?:\/\//i.test(location)) {
+        console.log("[抖音最高画质 v9] UHD resolved -> signed CDN");
+        $done({ url: location });
+        return;
+      }
+
+      // Some regions/accounts may not expose the original/UHD resolver. Never force it.
+      console.log("[抖音最高画质 v9] no UHD redirect (status=" + status + "); keep original request");
+      $done({});
+    });
   } catch (e) {
-    console.log("[抖音最高画质 v8] pass-through: " + String(e && e.message || e));
+    console.log("[抖音最高画质 v9] pass-through: " + String(e && e.message || e));
     $done({});
   }
 })();
