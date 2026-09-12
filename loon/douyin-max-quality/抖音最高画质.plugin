@@ -1,5 +1,5 @@
 #!name = 抖音最高画质
-#!desc = v8 改为只重写真正的视频播放请求，不再修改 feed/detail 等业务响应。播放 /aweme/v*/play/ 时把 ratio 强制为 default、improve_bitrate=1，并移除固定转码档参数；推荐、分页、评论、主页作品等数据完全不碰。
+#!desc = v9 不再改写抖音原始 /play/ 签名参数。播放时先用独立 HEAD 请求探测 ratio=default 原画/超高清地址，只有服务器成功返回签名 CDN 地址时才切过去；探测失败则原请求完全不动。推荐、分页、评论、主页作品数据均不修改。
 #!author = xlmc
 #!homepage = https://github.com/xlmc/xlmc.github.io/tree/main/loon/douyin-max-quality
 #!system = iOS,iPadOS
@@ -8,10 +8,10 @@
 #!type = normal
 
 [Argument]
-enabled = switch,true,tag=抖音视频最高画质,desc=仅改实际播放请求为原画/超高清参数，不修改推荐算法、分页、评论或主页数据
+enabled = switch,true,tag=抖音视频最高画质,desc=安全探测原画/超高清源；成功才切换，失败保持抖音原始播放请求
 
 [Script]
-request if ${url} ~= /^https:\/\/(?:aweme\.snssdk\.com|api\.amemv\.com)\/aweme\/v\d+\/play\/?(?:\?|$)/i then script("https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/douyin-max-quality/douyin-max-quality.js?v=8") with enable=${enabled}, tag="抖音最高画质 v8", timeout=15
+request if ${url} ~= /^https:\/\/(?:aweme\.snssdk\.com|api\.amemv\.com)\/aweme\/v\d+\/play\/?(?:\?|$)/i then script("https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/douyin-max-quality/douyin-max-quality.js?v=9") with enable=${enabled}, tag="抖音最高画质 v9", timeout=4
 
 [Mitm]
 hostname = aweme.snssdk.com, api.amemv.com
