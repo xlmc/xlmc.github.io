@@ -1,15 +1,10 @@
-// Douyin Max Quality - Loon response rewriter
-// Prefer Douyin's original/high-bitrate play endpoint (ratio=default + improve_bitrate=1),
-// then fall back to the highest advertised bit_rate rendition.
+// Douyin Max Quality - Loon response rewriter v7
+// Conservative mode: preserve recommendation payload and the full native ABR ladder.
+// Only prepend the original/high-bitrate resolver to playback URL lists.
 
 (function () {
   const raw = $response && $response.body;
   if (typeof raw !== "string" || !raw.length) { $done({}); return; }
-
-  function num(v) {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  }
 
   function text(v) {
     return v == null ? "" : String(v);
@@ -22,54 +17,6 @@
 
   function validAddr(a) {
     return !!(a && typeof a === "object" && Array.isArray(a.url_list) && a.url_list.length);
-  }
-
-  function addrOf(f) {
-    return (f && (f.play_addr || f.playAddr || f.play_addr_265 || f.play_addr_h264)) || null;
-  }
-
-  function bitrateOf(f) {
-    return num(f && (f.bit_rate || f.bitrate || f.avg_bitrate || f.average_bitrate || 0));
-  }
-
-  function dataSizeOf(f) {
-    const a = addrOf(f) || {};
-    return num(a.data_size || (f && f.data_size) || 0);
-  }
-
-  function isVideoObject(v) {
-    if (!v || typeof v !== "object") return false;
-    if (validAddr(v.play_addr) && text(v.play_addr.uri)) return true;
-    return Array.isArray(v.bit_rate) && v.bit_rate.some(f => f && typeof f === "object" && validAddr(addrOf(f)));
-  }
-
-  function pickHighestBitrate(candidates) {
-    if (!candidates.length) return null;
-    let best = candidates[0];
-    let bestBr = bitrateOf(best);
-    for (let i = 1; i < candidates.length; i++) {
-      const br = bitrateOf(candidates[i]);
-      if (br > bestBr || (br === bestBr && dataSizeOf(candidates[i]) > dataSizeOf(best))) {
-        best = candidates[i];
-        bestBr = br;
-      }
-    }
-    return best;
-  }
-
-  function videoIdOf(video, fallbackAddr) {
-    const ids = [
-      video && video.play_addr && video.play_addr.uri,
-      video && video.play_addr_265 && video.play_addr_265.uri,
-      video && video.play_addr_h264 && video.play_addr_h264.uri,
-      fallbackAddr && fallbackAddr.uri,
-      video && video.vid
-    ];
-    for (let i = 0; i < ids.length; i++) {
-      const id = text(ids[i]).trim();
-      if (id) return id;
-    }
-    return "";
   }
 
   function uniqueUrls(urls) {
@@ -99,57 +46,72 @@
     ];
   }
 
-  function makePreferredAddr(baseAddr, videoId) {
-    const out = clone(baseAddr) || {};
-    const fallback = validAddr(baseAddr) ? baseAddr.url_list : [];
-    out.uri = videoId;
-    // High-bitrate/original endpoints first. Existing CDN/play URLs remain as safe fallback.
-    out.url_list = uniqueUrls(originalUrls(videoId).concat(fallback));
-    return out;
+  function videoIdOf(video) {
+    const ids = [
+      video && video.play_addr && video.play_addr.uri,
+      video && video.play_addr_265 && video.play_addr_265.uri,
+      video && video.play_addr_h264 && video.play_addr_h264.uri,
+      video && video.vid
+    ];
+    if (video && Array.isArray(video.bit_rate)) {
+      for (let i = 0; i < video.bit_rate.length; i++) {
+        const f = video.bit_rate[i];
+        const a = f && (f.play_addr || f.playAddr || f.play_addr_265 || f.play_addr_h264);
+        if (a && a.uri) ids.push(a.uri);
+      }
+    }
+    for (let i = 0; i < ids.length; i++) {
+      const id = text(ids[i]).trim();
+      if (id) return id;
+    }
+    return "";
+  }
+
+  function prependOriginal(addr, videoId) {
+    if (!validAddr(addr) || !videoId) return false;
+    const old = addr.url_list.slice();
+    const next = uniqueUrls(originalUrls(videoId).concat(old));
+    if (!next.length) return false;
+    addr.url_list = next;
+    return true;
   }
 
   let changed = 0;
   const picked = [];
 
   function processVideo(video) {
-    if (!isVideoObject(video)) return;
-
-    const candidates = Array.isArray(video.bit_rate)
-      ? video.bit_rate.filter(f => f && typeof f === "object" && validAddr(addrOf(f)))
-      : [];
-    const best = pickHighestBitrate(candidates);
-    const fallbackAddr = (best && addrOf(best)) || video.play_addr || video.play_addr_265 || video.play_addr_h264;
-    if (!validAddr(fallbackAddr)) return;
-
-    const videoId = videoIdOf(video, fallbackAddr);
+    if (!video || typeof video !== "object") return;
+    const videoId = videoIdOf(video);
     if (!videoId) return;
 
-    const preferredAddr = makePreferredAddr(fallbackAddr, videoId);
-    if (!validAddr(preferredAddr)) return;
+    let localChanged = false;
 
-    // Force the player toward the original/high-bitrate resolver while keeping native fallback URLs.
-    video.play_addr = clone(preferredAddr);
-    if (Object.prototype.hasOwnProperty.call(video, "play_addr_265")) video.play_addr_265 = clone(preferredAddr);
-    if (Object.prototype.hasOwnProperty.call(video, "play_addr_h264")) video.play_addr_h264 = clone(preferredAddr);
-
-    // Keep one native rendition object so ABR cannot immediately down-select to lower ladders.
-    // Only its playback address is redirected to the original/high-bitrate resolver; all native
-    // gear_name / quality_type / codec / HDR / FPS metadata remains untouched.
-    if (best) {
-      const preferred = clone(best);
-      if (preferred.play_addr) preferred.play_addr = clone(preferredAddr);
-      else if (preferred.playAddr) preferred.playAddr = clone(preferredAddr);
-      else preferred.play_addr = clone(preferredAddr);
-      if (preferred.play_addr_265) preferred.play_addr_265 = clone(preferredAddr);
-      if (preferred.play_addr_h264) preferred.play_addr_h264 = clone(preferredAddr);
-      video.bit_rate = [preferred];
+    // Main playback address only. Do not replace the object, do not change codec metadata.
+    if (validAddr(video.play_addr)) {
+      localChanged = prependOriginal(video.play_addr, videoId) || localChanged;
     }
 
-    changed++;
-    picked.push("uri=" + videoId +
-      " | original/default" +
-      (best ? " | fallback=" + (text(best.gear_name) || "highest-bitrate") : "" ) +
-      (best && bitrateOf(best) ? " | " + Math.round(bitrateOf(best) / 1000) + "kbps" : ""));
+    // Preserve every native bitrate candidate and its order. Only add the resolver to the
+    // highest advertised bitrate candidate, leaving lower ABR fallbacks fully intact.
+    if (Array.isArray(video.bit_rate) && video.bit_rate.length) {
+      let best = null;
+      let bestRate = -1;
+      for (let i = 0; i < video.bit_rate.length; i++) {
+        const f = video.bit_rate[i];
+        if (!f || typeof f !== "object") continue;
+        const br = Number(f.bit_rate || f.bitrate || 0) || 0;
+        if (br > bestRate) { best = f; bestRate = br; }
+      }
+      if (best) {
+        const addr = best.play_addr || best.playAddr || best.play_addr_265 || best.play_addr_h264;
+        if (validAddr(addr)) localChanged = prependOriginal(addr, videoId) || localChanged;
+      }
+    }
+
+    if (localChanged) {
+      changed++;
+      picked.push("uri=" + videoId);
+    }
   }
 
   function walk(node) {
@@ -159,10 +121,12 @@
       return;
     }
 
-    if (isVideoObject(node)) processVideo(node);
+    // Only touch objects explicitly stored under a `video` key. This avoids rewriting
+    // recommendation controls, pagination data, user cards, comments and other resources.
+    if (node.video && typeof node.video === "object") processVideo(node.video);
 
     for (const k in node) {
-      if (!Object.prototype.hasOwnProperty.call(node, k) || k === "bit_rate") continue;
+      if (!Object.prototype.hasOwnProperty.call(node, k) || k === "video") continue;
       walk(node[k]);
     }
   }
@@ -171,10 +135,10 @@
     const data = JSON.parse(raw);
     walk(data);
     if (!changed) { $done({}); return; }
-    console.log("[抖音最高画质 v5] original-priority=" + changed + " | " + picked.slice(0, 8).join(" ; "));
+    console.log("[抖音最高画质 v7] conservative=" + changed + " | " + picked.slice(0, 8).join(" ; "));
     $done({ body: JSON.stringify(data) });
   } catch (e) {
-    console.log("[抖音最高画质 v5] pass-through: " + String(e && e.message || e));
+    console.log("[抖音最高画质 v7] pass-through: " + String(e && e.message || e));
     $done({});
   }
 })();
