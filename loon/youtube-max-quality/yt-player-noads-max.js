@@ -1,7 +1,7 @@
 // YouTube Player merged handler v12
-// Goal: keep the core /player ad removal from the user's current YouTubeNoAds module
-// while extracting the exact highest available video FormatId for the SABR request rewriter.
-// All unrelated protobuf fields are preserved byte-for-byte.
+// Keeps the core /player ad removal from the user's current YouTubeNoAds module
+// and extracts the exact highest available video FormatId for the SABR rewriter.
+// Unrelated protobuf fields are preserved byte-for-byte.
 
 (function () {
   let body = $response && ($response.bodyBytes || $response.body);
@@ -163,6 +163,14 @@
     return "";
   }
 
+  function compactFormat(f) {
+    return {
+      itag: f.itag,
+      lastModified: f.lastModified || 0,
+      xtags: f.xtags || ""
+    };
+  }
+
   function chooseTarget(formats) {
     if (!formats.length) return null;
     let maxRes = 0;
@@ -190,6 +198,7 @@
       fps: maxFps,
       maxBitrate: pool[0] ? (pool[0].averageBitrate || pool[0].bitrate || 0) : 0,
       menuLabel: maxRes + "p" + (maxFps > 30 ? String(Math.round(maxFps)) : "") + (hdr.length ? " HDR" : ""),
+      allFormats: formats.map(compactFormat),
       formats: pool.slice(0, 4).map(f => ({
         itag: f.itag,
         lastModified: f.lastModified || 0,
