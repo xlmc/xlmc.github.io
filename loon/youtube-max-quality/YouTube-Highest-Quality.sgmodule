@@ -1,13 +1,12 @@
 #!name=YouTube最高画质
-#!desc=Shadowrocket 共存版 v10：允许与现有 YouTube 去广告模块同时使用。/player 响应只读取最高可用规格，不修改内容；SABR 仅修改官方 ABR 偏好字段并完整保留原始会话、缓冲与回退格式。优先级：分辨率 > HDR > 高帧率 > 码率。
+#!desc=Shadowrocket 隔离共存版 v11：不再拦截 youtubei.googleapis.com /player，因此不与 YouTube 去广告模块争用播放器响应。仅在 *.googlevideo.com 的 SABR 请求里设置官方“更高画质/非省流/非计量网络”偏好并解除码率上限；不改广告、player 响应、格式列表、会话、缓冲或播放 Cookie。
 #!author=xlmc
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
 #!icon=https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
 #!category=YouTube
 
 [Script]
-YouTube最高画质·Player = type=http-response,pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/player(?:\?|$),requires-body=1,max-size=-1,binary-body-mode=1,engine=auto,script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-quality-probe.js?v=10
-YouTube最高画质·SABR = type=http-request,pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$),requires-body=1,max-size=-1,binary-body-mode=1,engine=auto,script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-probe.js?v=10
+YouTube最高画质·SABR = type=http-request,pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$),requires-body=1,max-size=-1,binary-body-mode=1,engine=auto,script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-probe.js?v=11
 
 [MITM]
-hostname = %APPEND% youtubei.googleapis.com, *.googlevideo.com
+hostname = %APPEND% *.googlevideo.com
