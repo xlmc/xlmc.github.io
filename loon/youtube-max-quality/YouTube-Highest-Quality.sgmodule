@@ -1,29 +1,21 @@
-#!name=YouTube去广告+最高画质
-#!desc=Shadowrocket 合并版 v14：保留已验证生效的 v13 最高画质逻辑，不再改动 SABR 选流；补强去广告链路，阻断 YouTube/GoogleVideo QUIC 使首页、player、initplayback 稳定回落到可被脚本处理的 HTTPS/TCP，并额外拒绝常见广告统计端点。画质优先级：分辨率 > HDR > 高帧率 > 码率。
-#!arguments=屏蔽上传按钮:true, 屏蔽选段按钮:true, 屏蔽Shorts按钮:false, 启用调试模式:false, 字幕翻译语言:off
-#!arguments-desc=\n▶ 参数说明:\n\n - 屏蔽按钮: 默认开启，可手动切换\n\n - 调试模式: 默认关闭，非调试无需切换\n\n - 翻译语言: 默认关闭，可自定义语言代码\n\n\n▶ 语言代码：\n\n - 简中: zh-Hans，日语: ja，韩语: ko，西语: es，法语: fr
-#!author=xlmc / YouTubeNoAds core based on Maasea
+#!name=YouTube最高画质
+#!desc=Shadowrocket 独立最高画质模块 v15。与任何 YouTube 去广告模块分离：本模块不删除广告、不修改 /player 响应，只在 /player 请求阶段旁路获取当前视频真实可用规格并缓存多个视频目标，再在 SABR 请求中按 分辨率 > HDR > 高帧率 > 码率 强制当前视频最高档。内置诊断日志用于一次性定位未命中原因。
+#!author=xlmc
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
 #!icon=https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
 #!category=YouTube
 
 [Rule]
-# YouTube iOS 会优先尝试 QUIC/HTTP3。阻断 UDP 后回落到 HTTPS/TCP，确保首页/player/initplayback 都经过 Shadowrocket 的 MITM 与脚本链。
+# 强制 YouTube 的 player/SABR 回落到可被 HTTPS MITM 脚本处理的 TCP；不包含任何广告规则。
 AND,((DOMAIN-SUFFIX,googlevideo.com),(PROTOCOL,UDP)),REJECT
 AND,((DOMAIN,youtubei.googleapis.com),(PROTOCOL,UDP)),REJECT
 
-[URL Rewrite]
-# 只拒绝明确的广告统计/追踪端点，不碰 videoplayback、initplayback 或 SABR 画质请求。
-^https?://(?:www|s)\.youtube\.com/api/stats/ads _ reject-200
-^https?://(?:www|s)\.youtube\.com/(?:pagead|ptracking) _ reject-200
-^https?://s\.youtube\.com/api/stats/qoe\?adcontext _ reject-200
-
 [Script]
-youtube.response.misc = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/(youtubei\/v1\/(browse|next|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch|log_event|config))(\?(.*))?$, script-path=https://raw.githubusercontent.com/Maasea/sgmodule/master/Script/Youtube/youtube.response.js, requires-body=true, binary-body-mode=true, max-size=0, argument="{\"captionLang\":\"{{{字幕翻译语言}}}\",\"blockUpload\":{{{屏蔽上传按钮}}},\"blockImmersive\":{{{屏蔽选段按钮}}},\"blockShorts\":{{{屏蔽Shorts按钮}}},\"debug\":{{{启用调试模式}}}}"
-youtube.response.player = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/player(?:\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-player-noads-max.js?v=12, requires-body=true, binary-body-mode=true, max-size=0
-youtube.request.init = type=http-request, pattern=^https?:\/\/[\w-]+\.googlevideo\.com\/initplayback.+&ack.*, script-path=https://raw.githubusercontent.com/Maasea/sgmodule/master/Script/Youtube/youtube.request.js, requires-body=true, binary-body-mode=true, max-size=0, argument="{\"captionLang\":\"{{{字幕翻译语言}}}\"}"
-youtube.request.log_event = type=http-request, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/log_event, script-path=https://raw.githubusercontent.com/Maasea/sgmodule/master/Script/Youtube/youtube.request.js, requires-body=true, binary-body-mode=true, max-size=0
-youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), requires-body=true, max-size=-1, binary-body-mode=true, engine=auto, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=13
+# 只观察原始 /player 请求，并向同一个 YouTube /player 端点发起一次旁路副本以读取规格；不修改原请求/响应。
+youtube.max.player.probe = type=http-request, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/player(?:\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-player-target-shadowrocket.js?v=15, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
+
+# 只修改 googlevideo SABR 选流请求；不接触 browse/next/player 响应，不与去广告 response 脚本争用。
+youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=15, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
 
 [MITM]
-hostname = %APPEND% *.googlevideo.com, youtubei.googleapis.com, s.youtube.com, www.youtube.com
+hostname = %APPEND% *.googlevideo.com, youtubei.googleapis.com
