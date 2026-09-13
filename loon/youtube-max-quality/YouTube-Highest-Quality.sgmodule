@@ -1,12 +1,18 @@
-#!name=YouTube最高画质
-#!desc=Shadowrocket 隔离共存版 v11：不再拦截 youtubei.googleapis.com /player，因此不与 YouTube 去广告模块争用播放器响应。仅在 *.googlevideo.com 的 SABR 请求里设置官方“更高画质/非省流/非计量网络”偏好并解除码率上限；不改广告、player 响应、格式列表、会话、缓冲或播放 Cookie。
-#!author=xlmc
+#!name=YouTube去广告+最高画质
+#!desc=Shadowrocket 合并版 v12：基于当前 YouTubeNoAds/Maasea 处理链整合。/player 只由一个脚本处理：删除核心播放器广告字段，同时读取当前视频实际最高规格；SABR 再用精确 FormatId + PlaybackCookie 请求该最高档，避免两个 /player 脚本互相覆盖。画质优先级：分辨率 > HDR > 高帧率 > 码率。
+#!arguments=屏蔽上传按钮:true, 屏蔽选段按钮:true, 屏蔽Shorts按钮:false, 启用调试模式:false, 字幕翻译语言:off
+#!arguments-desc=\n▶ 参数说明:\n\n - 屏蔽按钮: 默认开启，可手动切换\n\n - 调试模式: 默认关闭，非调试无需切换\n\n - 翻译语言: 默认关闭，可自定义语言代码\n\n\n▶ 语言代码：\n\n - 简中: zh-Hans，日语: ja，韩语: ko，西语: es，法语: fr
+#!author=xlmc / YouTubeNoAds core based on Maasea
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
 #!icon=https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
 #!category=YouTube
 
 [Script]
-YouTube最高画质·SABR = type=http-request,pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$),requires-body=1,max-size=-1,binary-body-mode=1,engine=auto,script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-probe.js?v=11
+youtube.response.misc = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/(youtubei\/v1\/(browse|next|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch|log_event|config))(\?(.*))?$, script-path=https://raw.githubusercontent.com/Maasea/sgmodule/master/Script/Youtube/youtube.response.js, requires-body=true, binary-body-mode=true, max-size=0, argument="{\"captionLang\":\"{{{字幕翻译语言}}}\",\"blockUpload\":{{{屏蔽上传按钮}}},\"blockImmersive\":{{{屏蔽选段按钮}}},\"blockShorts\":{{{屏蔽Shorts按钮}}},\"debug\":{{{启用调试模式}}}}"
+youtube.response.player = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/player(?:\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-player-noads-max.js?v=12, requires-body=true, binary-body-mode=true, max-size=0
+youtube.request.init = type=http-request, pattern=^https?:\/\/[\w-]+\.googlevideo\.com\/initplayback.+&ack.*, script-path=https://raw.githubusercontent.com/Maasea/sgmodule/master/Script/Youtube/youtube.request.js, requires-body=true, binary-body-mode=true, max-size=0, argument="{\"captionLang\":\"{{{字幕翻译语言}}}\"}"
+youtube.request.log_event = type=http-request, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/log_event, script-path=https://raw.githubusercontent.com/Maasea/sgmodule/master/Script/Youtube/youtube.request.js, requires-body=true, binary-body-mode=true, max-size=0
+youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), requires-body=true, max-size=-1, binary-body-mode=true, engine=auto, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-probe.js?v=12
 
 [MITM]
-hostname = %APPEND% *.googlevideo.com
+hostname = %APPEND% *.googlevideo.com, youtubei.googleapis.com
