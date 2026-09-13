@@ -1,33 +1,26 @@
-// YouTube NoAds + Max Quality - Shadowrocket SABR exact-format rewriter v13
-// Force the exact highest tier discovered from /player while preserving session/buffer state.
-// Key fix vs v12: manual exact selection must use VideoQualitySetting.ADVANCED_MENU (3),
-// not HIGHER_QUALITY (1), which is only an ABR preference.
+// YouTube Max Quality - Shadowrocket SABR rewriter v15
+// Independent quality-only implementation. It never touches ad responses.
+// Matches each SABR request against a multi-video cache captured by the /player request probe,
+// then switches the request to that video's exact highest available official quality tier.
 
 (function () {
+  const PREFIX = "[YT Max SR v15][SABR]";
+  const CACHE_KEY = "ytmq.sr.targets.v15";
+  const TTL_MS = 5 * 60 * 1000;
+
   let body = $request && ($request.bodyBytes || $request.body);
   if (body instanceof ArrayBuffer) body = new Uint8Array(body);
   const url = ($request && $request.url) || "";
-  const method = ($request && $request.method) || "";
+  const method = String(($request && $request.method) || "").toUpperCase();
 
   function query(name) {
     try { return new URL(url).searchParams.get(name) || ""; } catch (_) { return ""; }
   }
 
-  if (method.toUpperCase() !== "POST" || query("sabr") !== "1" || !(body instanceof Uint8Array) || !body.length || !/\/videoplayback(?:\?|\/|$)/i.test(url)) {
+  if (method !== "POST" || query("sabr") !== "1" || !(body instanceof Uint8Array) || !body.length || !/\/videoplayback(?:\?|\/|$)/i.test(url)) {
     $done({});
     return;
   }
-
-  let target = null;
-  try { target = JSON.parse($persistentStore.read("ytmq.max.target") || "null"); } catch (_) {}
-  if (!target || !target.capturedAt || Date.now() - Number(target.capturedAt) > 120000 || !Array.isArray(target.formats) || !target.formats.length || !Array.isArray(target.allFormats)) {
-    $done({});
-    return;
-  }
-
-  const topFormats = target.formats.filter(f => f && Number(f.itag));
-  if (!topFormats.length) { $done({}); return; }
-  const best = topFormats[0];
 
   function readVarint(buf, pos, end) {
     let value = 0, mul = 1, count = 0;
@@ -77,7 +70,6 @@
       } else {
         throw new Error("unsupported wire type " + wire);
       }
-
       fields.push({ field, wire, value, dataStart, dataEnd, raw: buf.slice(fieldStart, p) });
     }
     return fields;
@@ -133,8 +125,7 @@
 
   function parseFormatId(payload) {
     const out = { itag: 0, lastModified: 0, xtags: "" };
-    const fields = parseFields(payload, 0, payload.length);
-    for (const f of fields) {
+    for (const f of parseFields(payload, 0, payload.length)) {
       if (f.field === 1 && f.wire === 0) out.itag = Number(f.value || 0);
       else if (f.field === 2 && f.wire === 0) out.lastModified = Number(f.value || 0);
       else if (f.field === 3 && f.wire === 2) out.xtags = utf8Decode(payload, f.dataStart, f.dataEnd);
@@ -150,22 +141,109 @@
     return concat(chunks);
   }
 
-  function sameFormat(a, b) {
-    if (!a || !b || Number(a.itag || 0) !== Number(b.itag || 0)) return false;
-    const al = Number(a.lastModified || 0), bl = Number(b.lastModified || 0);
-    if (al && bl && al !== bl) return false;
-    const ax = String(a.xtags || ""), bx = String(b.xtags || "");
-    if (ax && bx && ax !== bx) return false;
-    return true;
+  function identityString(id) {
+    if (!id) return "?";
+    return String(id.itag || 0) + ":" + String(id.lastModified || 0) + (id.xtags ? ":x" : "");
   }
 
-  function belongsToCapturedVideo(id) {
-    if (!id || !Number(id.itag || 0)) return false;
-    for (const f of target.allFormats) if (sameFormat(id, f)) return true;
+  function matchScore(a, b) {
+    if (!a || !b || !Number(a.itag) || Number(a.itag) !== Number(b.itag)) return 0;
+    let score = 1;
+    const al = Number(a.lastModified || 0), bl = Number(b.lastModified || 0);
+    if (al && bl) {
+      if (al !== bl) return 0;
+      score += 4;
+    }
+    const ax = String(a.xtags || ""), bx = String(b.xtags || "");
+    if (ax && bx) {
+      if (ax !== bx) return 0;
+      score += 3;
+    }
+    return score;
+  }
+
+  function loadTargets() {
+    let list = [];
+    try { list = JSON.parse($persistentStore.read(CACHE_KEY) || "[]"); } catch (_) {}
+    if (!Array.isArray(list)) list = [];
+    const now = Date.now();
+    return list.filter(x => x && x.version === 15 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS && Array.isArray(x.formats) && x.formats.length && Array.isArray(x.allFormats));
+  }
+
+  function collectIdentityEvidence(fields, buf) {
+    const ids = [];
+    function push(payload) {
+      try {
+        const id = parseFormatId(payload);
+        if (id.itag) ids.push(id);
+      } catch (_) {}
+    }
+
+    for (const f of fields) {
+      // selected_format_ids and preferred_video_format_ids
+      if ((f.field === 2 || f.field === 17) && f.wire === 2) {
+        push(buf.slice(f.dataStart, f.dataEnd));
+      }
+      // UnknownMessage1.format_id inside field 6
+      else if (f.field === 6 && f.wire === 2) {
+        try {
+          const nested = buf.slice(f.dataStart, f.dataEnd);
+          for (const nf of parseFields(nested, 0, nested.length)) {
+            if (nf.field === 1 && nf.wire === 2) push(nested.slice(nf.dataStart, nf.dataEnd));
+          }
+        } catch (_) {}
+      }
+      // StreamerContext.playback_cookie.video_fmt
+      else if (f.field === 19 && f.wire === 2) {
+        try {
+          const ctx = buf.slice(f.dataStart, f.dataEnd);
+          for (const cf of parseFields(ctx, 0, ctx.length)) {
+            if (cf.field !== 3 || cf.wire !== 2) continue;
+            const cookie = ctx.slice(cf.dataStart, cf.dataEnd);
+            for (const pf of parseFields(cookie, 0, cookie.length)) {
+              if (pf.field === 7 && pf.wire === 2) push(cookie.slice(pf.dataStart, pf.dataEnd));
+            }
+          }
+        } catch (_) {}
+      }
+      // field1000.UnknownMessage3.format_ids
+      else if (f.field === 1000 && f.wire === 2) {
+        try {
+          const nested = buf.slice(f.dataStart, f.dataEnd);
+          for (const nf of parseFields(nested, 0, nested.length)) {
+            if (nf.field === 1 && nf.wire === 2) push(nested.slice(nf.dataStart, nf.dataEnd));
+          }
+        } catch (_) {}
+      }
+    }
+    return ids;
+  }
+
+  function findTarget(targets, evidence) {
+    let winner = null, bestScore = 0;
+    for (const target of targets) {
+      let score = 0;
+      for (const id of evidence) {
+        for (const candidate of target.allFormats) {
+          score = Math.max(score, matchScore(id, candidate));
+        }
+      }
+      // Strong identity = itag + lastModified (score >=5) or itag + lastModified + xtags.
+      // Do not trust itag-only matches because the same itag is reused across videos.
+      if (score > bestScore) {
+        bestScore = score;
+        winner = target;
+      }
+    }
+    return bestScore >= 5 ? { target: winner, score: bestScore } : null;
+  }
+
+  function targetContains(target, id) {
+    for (const f of target.allFormats) if (matchScore(id, f) >= 5) return true;
     return false;
   }
 
-  function rewriteClientAbrState(payload) {
+  function rewriteClientAbrState(payload, target) {
     const fields = parseFields(payload, 0, payload.length);
     let currentBandwidth = 0;
     for (const f of fields) {
@@ -178,16 +256,14 @@
       16: Number(target.resolution || 0), // last_manual_selected_resolution
       21: Number(target.resolution || 0), // sticky_resolution
       23: desiredBandwidth,               // bandwidth_estimate
-      26: 3,                              // ADVANCED_MENU = exact/manual tier
-      30: 0,                              // data_saver_mode = false
+      26: 3,                              // ADVANCED_MENU
+      30: 0,                              // data_saver_mode=false
       32: 1                               // UNMETERED
     };
 
     const done = Object.create(null), chunks = [];
     for (const f of fields) {
-      // Remove native bitrate ceiling if present.
-      if (f.field === 20 && f.wire === 0) continue;
-
+      if (f.field === 20 && f.wire === 0) continue; // remove bitrate ceiling
       if (Object.prototype.hasOwnProperty.call(replacements, f.field) && f.wire === 0) {
         if (!done[f.field]) {
           chunks.push(varField(f.field, replacements[f.field]));
@@ -197,7 +273,6 @@
         chunks.push(f.raw);
       }
     }
-
     for (const k of Object.keys(replacements)) {
       const n = Number(k);
       if (!done[n]) chunks.push(varField(n, replacements[n]));
@@ -205,11 +280,10 @@
     return concat(chunks);
   }
 
-  function rewritePlaybackCookie(payload) {
+  function rewritePlaybackCookie(payload, best) {
     const fields = parseFields(payload, 0, payload.length);
     const chunks = [];
     let wroteResolution = false, wroteVideo = false;
-
     for (const f of fields) {
       if (f.field === 1 && f.wire === 0) {
         if (!wroteResolution) {
@@ -225,87 +299,67 @@
         chunks.push(f.raw);
       }
     }
-
     if (!wroteResolution) chunks.push(varField(1, 999999));
     if (!wroteVideo) chunks.push(bytesField(7, formatIdMessage(best)));
     return concat(chunks);
   }
 
-  function rewriteStreamerContext(payload) {
+  function rewriteStreamerContext(payload, best) {
     const fields = parseFields(payload, 0, payload.length);
     const chunks = [];
     let wroteCookie = false;
-
     for (const f of fields) {
       if (f.field === 3 && f.wire === 2) {
-        chunks.push(bytesField(3, rewritePlaybackCookie(payload.slice(f.dataStart, f.dataEnd))));
+        chunks.push(bytesField(3, rewritePlaybackCookie(payload.slice(f.dataStart, f.dataEnd), best)));
         wroteCookie = true;
       } else {
         chunks.push(f.raw);
       }
     }
-
     if (!wroteCookie) {
-      const cookie = concat([
+      chunks.push(bytesField(3, concat([
         varField(1, 999999),
         bytesField(7, formatIdMessage(best))
-      ]);
-      chunks.push(bytesField(3, cookie));
+      ])));
     }
     return concat(chunks);
   }
 
-  function collectIdentityEvidence(fields, buf) {
-    const ids = [];
-    for (const f of fields) {
-      if ((f.field === 2 || f.field === 17) && f.wire === 2) {
-        try { ids.push(parseFormatId(buf.slice(f.dataStart, f.dataEnd))); } catch (_) {}
-      } else if (f.field === 19 && f.wire === 2) {
-        try {
-          const ctx = buf.slice(f.dataStart, f.dataEnd);
-          const ctxFields = parseFields(ctx, 0, ctx.length);
-          for (const cf of ctxFields) {
-            if (cf.field !== 3 || cf.wire !== 2) continue;
-            const cookie = ctx.slice(cf.dataStart, cf.dataEnd);
-            const cookieFields = parseFields(cookie, 0, cookie.length);
-            for (const pf of cookieFields) {
-              if (pf.field === 7 && pf.wire === 2) {
-                try { ids.push(parseFormatId(cookie.slice(pf.dataStart, pf.dataEnd))); } catch (_) {}
-              }
-            }
-          }
-        } catch (_) {}
-      }
-    }
-    return ids;
-  }
-
-  function rewriteRequest(buf) {
+  function rewriteRequest(buf, target) {
     const fields = parseFields(buf, 0, buf.length);
-    const evidence = collectIdentityEvidence(fields, buf);
-    let matched = false;
-    for (const id of evidence) {
-      if (belongsToCapturedVideo(id)) { matched = true; break; }
-    }
-    if (!matched) return null;
+    const topFormats = target.formats.filter(f => f && Number(f.itag));
+    const best = topFormats[0];
+    if (!best) return null;
 
     const chunks = [];
-    let sawClient = false, wrotePreferred = false;
+    let sawClient = false, wrotePreferred = false, switchedSelectedVideo = false;
 
     for (const f of fields) {
       if (f.field === 1 && f.wire === 2) {
-        chunks.push(bytesField(1, rewriteClientAbrState(buf.slice(f.dataStart, f.dataEnd))));
+        chunks.push(bytesField(1, rewriteClientAbrState(buf.slice(f.dataStart, f.dataEnd), target)));
         sawClient = true;
+      } else if (f.field === 2 && f.wire === 2) {
+        // Manual quality changes update the selected video format too. Replace only the
+        // video FormatId belonging to this target; preserve selected audio/subtitle IDs.
+        let id = null;
+        try { id = parseFormatId(buf.slice(f.dataStart, f.dataEnd)); } catch (_) {}
+        if (id && targetContains(target, id)) {
+          if (!switchedSelectedVideo) {
+            chunks.push(bytesField(2, formatIdMessage(best)));
+            switchedSelectedVideo = true;
+          }
+        } else {
+          chunks.push(f.raw);
+        }
       } else if (f.field === 17 && f.wire === 2) {
-        // Manual Advanced mode: replace the native ABR ladder with only formats
-        // from the exact highest official quality tier. Keep every codec/bitrate
-        // variant in that tier so the server can choose a device-compatible one.
+        // Replace the native current-video preference with all compatible variants from
+        // the exact highest official tier (resolution > HDR > FPS > bitrate).
         if (!wrotePreferred) {
           for (const fmt of topFormats) chunks.push(bytesField(17, formatIdMessage(fmt)));
           wrotePreferred = true;
         }
       } else if (f.field === 19 && f.wire === 2) {
-        chunks.push(bytesField(19, rewriteStreamerContext(buf.slice(f.dataStart, f.dataEnd))));
+        chunks.push(bytesField(19, rewriteStreamerContext(buf.slice(f.dataStart, f.dataEnd), best)));
       } else {
         chunks.push(f.raw);
       }
@@ -315,26 +369,54 @@
     if (!wrotePreferred) {
       for (const fmt of topFormats) chunks.push(bytesField(17, formatIdMessage(fmt)));
     }
-    return concat(chunks);
+    return {
+      body: concat(chunks),
+      selectedSwitched: switchedSelectedVideo,
+      preferred: topFormats.map(f => f.itag),
+      cookie: best.itag
+    };
   }
 
   try {
-    const out = rewriteRequest(body);
-    if (!out) {
-      console.log("[YT NoAds+Max v13] target mismatch/unknown SABR shape; pass-through");
+    const targets = loadTargets();
+    if (!targets.length) {
+      console.log(PREFIX + " miss: cache empty | body=" + body.length);
+      $done({});
+      return;
+    }
+
+    const fields = parseFields(body, 0, body.length);
+    const evidence = collectIdentityEvidence(fields, body);
+    const matched = findTarget(targets, evidence);
+    if (!matched) {
+      console.log(
+        PREFIX + " miss: no strong target match | cache=" + targets.length +
+        " | evidence=" + evidence.slice(0, 8).map(identityString).join(",")
+      );
+      $done({});
+      return;
+    }
+
+    const target = matched.target;
+    const rewritten = rewriteRequest(body, target);
+    if (!rewritten) {
+      console.log(PREFIX + " miss: unknown SABR shape | video=" + (target.videoId || "?") + " | target=" + target.menuLabel);
       $done({});
       return;
     }
 
     console.log(
-      "[YT NoAds+Max v13] manual=" + (target.menuLabel || (target.resolution + "p")) +
-      " | preferred=" + topFormats.map(f => f.itag).join(",") +
-      " | cookie=" + best.itag +
-      " | body=" + body.length + "->" + out.length
+      PREFIX + " forced | video=" + (target.videoId || "?") +
+      " | target=" + target.menuLabel +
+      " | score=" + matched.score +
+      " | selected=" + (rewritten.selectedSwitched ? "switched" : "not-found") +
+      " | pvi=" + rewritten.preferred.join(",") +
+      " | cookie=" + rewritten.cookie +
+      " | body=" + body.length + "->" + rewritten.body.length
     );
-    $done({ body: out });
+    $done({ body: rewritten.body });
   } catch (e) {
-    console.log("[YT NoAds+Max v13] SABR pass-through: " + String(e && e.message || e));
+    console.log(PREFIX + " error: " + String(e && e.message || e));
     $done({});
   }
 })();
