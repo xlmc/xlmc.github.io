@@ -1,8 +1,8 @@
 #!name=YouTube最高画质（Shadowrocket 暂停使用）
-#!desc=Shadowrocket 版已临时停用：此前对 YouTube SABR 二进制请求的强制改写会导致播放器持续暂停/无法播放。当前模块不再拦截或修改任何 YouTube 请求，待按 Shadowrocket 实际 SABR 协议重新实现后再恢复。
+#!desc=Shadowrocket 版已临时停用：此前的 SABR 强制改写会导致播放器持续暂停/无法播放。当前模块不会拦截或修改任何 YouTube 请求，仅保留一个永远不会命中的占位规则，确保 Shadowrocket 能正常识别和更新模块。
 #!author=xlmc
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
 #!category=YouTube
 
-# 安全停用版：无 Script、无 MITM、无 Rewrite。
-# 刷新模块后不会再影响 YouTube 播放。
+[URL Rewrite]
+^https:\/\/disabled\.invalid\/__youtube_max_quality_disabled__$ - reject
