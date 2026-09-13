@@ -1,8 +1,13 @@
-#!name=YouTube最高画质（Shadowrocket 暂停使用）
-#!desc=Shadowrocket 版已临时停用：此前的 SABR 强制改写会导致播放器持续暂停/无法播放。当前模块不会拦截或修改任何 YouTube 请求，仅保留一个永远不会命中的占位规则，确保 Shadowrocket 能正常识别和更新模块。
+#!name=YouTube最高画质
+#!desc=Shadowrocket 共存版 v10：允许与现有 YouTube 去广告模块同时使用。/player 响应只读取最高可用规格，不修改内容；SABR 仅修改官方 ABR 偏好字段并完整保留原始会话、缓冲与回退格式。优先级：分辨率 > HDR > 高帧率 > 码率。
 #!author=xlmc
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
+#!icon=https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
 #!category=YouTube
 
-[URL Rewrite]
-^https:\/\/disabled\.invalid\/__youtube_max_quality_disabled__$ - reject
+[Script]
+YouTube最高画质·Player = type=http-response,pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/player(?:\?|$),requires-body=1,max-size=-1,binary-body-mode=1,engine=auto,script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-quality-probe.js?v=10
+YouTube最高画质·SABR = type=http-request,pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$),requires-body=1,max-size=-1,binary-body-mode=1,engine=auto,script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-probe.js?v=10
+
+[MITM]
+hostname = %APPEND% youtubei.googleapis.com, *.googlevideo.com
