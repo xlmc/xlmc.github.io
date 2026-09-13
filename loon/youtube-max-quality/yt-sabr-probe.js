@@ -1,6 +1,7 @@
-// YouTube Max Quality - Shadowrocket/Loon SABR preference rewriter v10
-// Coexists with YouTube ad-block modules: preserve the original SABR request structure,
-// patch only documented ABR preference fields, and keep every native format/session fallback.
+// YouTube Max Quality - Shadowrocket/Loon SABR preference rewriter v11
+// Isolation mode: never touches /youtubei/v1/player, ad data, player responses,
+// preferred format lists, session context, playback cookies, or buffer state.
+// It only nudges documented ClientAbrState quality/network preference fields.
 
 (function () {
   const body = $request && $request.body;
@@ -14,36 +15,6 @@
   if (method.toUpperCase() !== "POST" || query("sabr") !== "1" || !(body instanceof Uint8Array) || !body.length || !/\/videoplayback(?:\?|\/|$)/i.test(url)) {
     $done({});
     return;
-  }
-
-  let target = null;
-  try { target = JSON.parse($persistentStore.read("ytmq.max.target") || "null"); } catch (_) {}
-  if (!target || !target.resolution || !Array.isArray(target.formats) || !target.formats.length || !target.capturedAt) {
-    $done({});
-    return;
-  }
-
-  const now = Date.now();
-  const sabrId = query("id");
-  const age = now - Number(target.capturedAt || 0);
-
-  // Bind a freshly captured /player target to the first SABR stream id. This keeps the
-  // preference active for long videos without accidentally reusing an old video's target.
-  if (target.boundSabrId) {
-    if (!sabrId || target.boundSabrId !== sabrId || age > 6 * 60 * 60 * 1000) {
-      $done({});
-      return;
-    }
-  } else {
-    if (age > 60 * 1000) {
-      $done({});
-      return;
-    }
-    if (sabrId) {
-      target.boundSabrId = sabrId;
-      target.boundAt = now;
-      try { $persistentStore.write(JSON.stringify(target), "ytmq.max.target"); } catch (_) {}
-    }
   }
 
   function readVarint(buf, pos, end) {
@@ -74,7 +45,7 @@
       const tag = tr[0];
       p = tr[1];
       const field = Math.floor(tag / 8), wire = tag & 7;
-      let dataStart = -1, dataEnd = -1, value = null;
+      let value = null, dataStart = -1, dataEnd = -1;
 
       if (wire === 0) {
         const r = readVarint(buf, p, end);
@@ -131,48 +102,6 @@
     return concat([encVarint(field * 8 + 2), encVarint(payload.length), payload]);
   }
 
-  function utf8Encode(s) {
-    if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(s || "");
-    const str = unescape(encodeURIComponent(s || ""));
-    const out = new Uint8Array(str.length);
-    for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i);
-    return out;
-  }
-
-  function utf8Decode(buf, start, end) {
-    if (typeof TextDecoder !== "undefined") {
-      try { return new TextDecoder("utf-8").decode(buf.slice(start, end)); } catch (_) {}
-    }
-    let s = "";
-    for (let i = start; i < end; i++) s += String.fromCharCode(buf[i]);
-    try { return decodeURIComponent(escape(s)); } catch (_) { return s; }
-  }
-
-  function parseFormatId(payload) {
-    const out = { itag: 0, lastModified: 0, xtags: "" };
-    const fields = parseFields(payload, 0, payload.length);
-    for (const f of fields) {
-      if (f.field === 1 && f.wire === 0) out.itag = Number(f.value || 0);
-      else if (f.field === 2 && f.wire === 0) out.lastModified = Number(f.value || 0);
-      else if (f.field === 3 && f.wire === 2) out.xtags = utf8Decode(payload, f.dataStart, f.dataEnd);
-    }
-    return out;
-  }
-
-  function formatKey(f) {
-    return String(Number(f.itag || 0)) + "|" + String(Number(f.lastModified || 0)) + "|" + String(f.xtags || "");
-  }
-
-  function formatIdMessage(f) {
-    const itag = Number(f && f.itag || 0);
-    if (!itag) return null;
-    const chunks = [varField(1, itag)];
-    const lm = Number(f.lastModified || 0);
-    if (Number.isSafeInteger(lm) && lm > 0) chunks.push(varField(2, lm));
-    if (f.xtags) chunks.push(bytesField(3, utf8Encode(String(f.xtags))));
-    return concat(chunks);
-  }
-
   function rewriteClientAbrState(payload) {
     const fields = parseFields(payload, 0, payload.length);
     let currentBandwidth = 0;
@@ -180,19 +109,16 @@
       if (f.field === 23 && f.wire === 0) currentBandwidth = Math.max(currentBandwidth, Number(f.value || 0));
     }
 
-    // Current SABR proto:
-    // 16 last_manual_selected_resolution, 21 sticky_resolution,
-    // 23 bandwidth_estimate, 26 video_quality_setting (1 = HIGHER_QUALITY),
-    // 30 data_saver_mode, 32 network_metered_state (1 = UNMETERED).
-    const desiredBandwidth = Math.max(
-      currentBandwidth,
-      100000000,
-      Math.floor(Number(target.maxBitrate || 0) * 8)
-    );
+    // Current documented SABR fields:
+    // 20 client_bitrate_cap_bytes_per_sec
+    // 23 bandwidth_estimate
+    // 26 video_quality_setting (1 = HIGHER_QUALITY)
+    // 30 data_saver_mode
+    // 32 network_metered_state (1 = UNMETERED)
+    // We intentionally do NOT touch resolution, preferredVideoFormatIds, selected formats,
+    // player time, playback cookies, streamer context, or any ad/player response data.
     const replacements = {
-      16: Number(target.resolution),
-      21: Number(target.resolution),
-      23: desiredBandwidth,
+      23: Math.max(currentBandwidth, 250000000),
       26: 1,
       30: 0,
       32: 1
@@ -201,7 +127,7 @@
     const done = Object.create(null);
     const chunks = [];
     for (const f of fields) {
-      // field 20 is client_bitrate_cap_bytes_per_sec. Omit it so the native request has no cap.
+      // Remove a native bitrate ceiling if present; let server ABR choose from all allowed tiers.
       if (f.field === 20 && f.wire === 0) continue;
 
       if (Object.prototype.hasOwnProperty.call(replacements, f.field) && f.wire === 0) {
@@ -223,90 +149,35 @@
 
   function rewriteRequest(buf) {
     const fields = parseFields(buf, 0, buf.length);
-    const preferred = [];
-    let clientStateSeen = false;
-
-    for (const f of fields) {
-      if (f.field === 1 && f.wire === 2) clientStateSeen = true;
-      if (f.field === 17 && f.wire === 2) {
-        const payload = buf.slice(f.dataStart, f.dataEnd);
-        let id = null;
-        try { id = parseFormatId(payload); } catch (_) {}
-        preferred.push({ raw: f.raw, id, key: id ? formatKey(id) : "" });
-      }
-    }
-
-    // A valid modern SABR request should already contain ClientAbrState. Never synthesize
-    // one from scratch; if its shape changes, pass the request through untouched.
-    if (!clientStateSeen) return null;
-
-    const targetFormats = target.formats
-      .filter(f => f && Number(f.itag || 0) > 0)
-      .slice(0, 4);
-
-    const originalByKey = Object.create(null);
-    for (const p of preferred) if (p.key && !originalByKey[p.key]) originalByKey[p.key] = p.raw;
-
-    const preferredChunks = [];
-    const emitted = Object.create(null);
-    for (const fmt of targetFormats) {
-      const key = formatKey(fmt);
-      if (emitted[key]) continue;
-      if (originalByKey[key]) {
-        preferredChunks.push(originalByKey[key]);
-        emitted[key] = true;
-        continue;
-      }
-      const payload = formatIdMessage(fmt);
-      if (payload) {
-        preferredChunks.push(bytesField(17, payload));
-        emitted[key] = true;
-      }
-    }
-    for (const p of preferred) {
-      if (p.key && emitted[p.key]) continue;
-      preferredChunks.push(p.raw);
-      if (p.key) emitted[p.key] = true;
-    }
-
     const chunks = [];
-    let wrotePreferred = false;
+    let changed = false;
+
     for (const f of fields) {
       if (f.field === 1 && f.wire === 2) {
         const payload = buf.slice(f.dataStart, f.dataEnd);
         chunks.push(bytesField(1, rewriteClientAbrState(payload)));
-      } else if (f.field === 17 && f.wire === 2) {
-        if (!wrotePreferred) {
-          for (const c of preferredChunks) chunks.push(c);
-          wrotePreferred = true;
-        }
+        changed = true;
       } else {
         chunks.push(f.raw);
       }
     }
 
-    if (!wrotePreferred) {
-      for (const c of preferredChunks) chunks.push(c);
-    }
-    return concat(chunks);
+    // Unknown/changed SABR shape: fail open and leave the request untouched.
+    return changed ? concat(chunks) : null;
   }
 
   try {
     const out = rewriteRequest(body);
     if (!out) {
-      console.log("[YT Max Quality v10] unknown SABR shape; pass-through");
+      console.log("[YT Max Quality v11] no ClientAbrState; pass-through");
       $done({});
       return;
     }
-    console.log(
-      "[YT Max Quality v10] " + (target.menuLabel || (target.resolution + "p")) +
-      " | sticky=" + target.resolution +
-      " | prefer=" + target.formats.slice(0, 4).map(f => f.itag).join(",") +
-      " | body=" + body.length + "->" + out.length
-    );
+
+    console.log("[YT Max Quality v11] isolated ABR preference applied | body=" + body.length + "->" + out.length);
     $done({ body: out });
   } catch (e) {
-    console.log("[YT Max Quality v10] SABR pass-through: " + String(e && e.message || e));
+    console.log("[YT Max Quality v11] pass-through: " + String(e && e.message || e));
     $done({});
   }
 })();
