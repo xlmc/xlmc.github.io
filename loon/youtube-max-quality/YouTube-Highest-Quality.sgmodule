@@ -1,4 +1,4 @@
-#!name=YouTube去广告+最高画质
+#!name=YouTube去广告+最高画质 v19
 #!desc=Shadowrocket 合并优化版 v19。去广告与最高画质共用同一条 /player 响应脚本，避免两个 http-response 处理器互相覆盖；不再复制 /player 请求，也不再使用 init-stream.maasea.workers.dev。广告清理由本地 Protobuf 响应处理 + ctier/oad 规则完成；最高画质继续由 SABR 锁定并用 buffered_ranges 验证实际缓冲档位。
 #!author=xlmc / Maasea / nrhb11
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
