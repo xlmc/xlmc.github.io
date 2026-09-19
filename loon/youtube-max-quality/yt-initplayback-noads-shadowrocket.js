@@ -1,10 +1,10 @@
-// YouTube NoAds - Shadowrocket initplayback fallback v23
+// YouTube NoAds - Shadowrocket initplayback fallback v24
 // Mirrors the original Maasea no-key fallback locally: when initplayback reaches the
 // acknowledged ad/Onesie stage, return an empty 200 so the app falls back to v1/player.
 // No remote Worker, no duplicate request, and no playback response rewriting here.
 
 (function () {
-  const PREFIX = "[YT NoAds SR v23][INIT]";
+  const PREFIX = "[YT NoAds SR v24][INIT]";
   const url = ($request && $request.url) || "";
 
   let u;
