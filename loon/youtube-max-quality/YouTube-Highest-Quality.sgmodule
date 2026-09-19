@@ -33,10 +33,10 @@ AND,((DOMAIN,youtubei.googleapis.com),(PROTOCOL,UDP)),REJECT
 # 1) 只读解析真实 /player 响应并缓存当前视频最高规格；
 # 2) 同一脚本继续执行 Maasea-derived Protobuf 去广告；
 # 3) 只有这一条脚本负责 /player 的 $done()，避免处理器冲突。
-youtube.mobile.noads.max = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-mobile-noads-max-shadowrocket.js?v=19, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
+youtube.mobile.noads.max = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-mobile-noads-max-shadowrocket.js?v=20, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
 
 # 只修改 SABR 选流请求。无额外 /player 网络请求；active-video 绑定 + 最高兼容档自动收敛。
-youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=19, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
+youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=20, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
 
 [MITM]
 hostname = %APPEND% *.googlevideo.com, youtubei.googleapis.com
