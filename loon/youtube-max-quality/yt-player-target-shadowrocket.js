@@ -1,56 +1,27 @@
-// YouTube Max Quality - Shadowrocket target probe v17
-// Independent from ad blocking: observes the outbound /player request, performs a duplicate
-// request to the same YouTube endpoint, parses the returned player protobuf, and caches
-// several recent per-video highest-quality targets for the SABR rewriter.
+// YouTube Max Quality - Shadowrocket target probe v18
+// Independent from ad blocking: observes the real /player response in-place, parses its
+// streaming formats locally, and caches recent per-video highest-quality targets for SABR.
+// No duplicate network request is made, so this adds only local protobuf parsing overhead.
 
 (function () {
-  const PREFIX = "[YT Max SR v17][PLAYER]";
-  const CACHE_KEY = "ytmq.sr.targets.v17";
+  const PREFIX = "[YT Max SR v18][PLAYER]";
+  const CACHE_KEY = "ytmq.sr.targets.v18";
   const MAX_TARGETS = 12;
   const TTL_MS = 5 * 60 * 1000;
 
   const req = $request || {};
   const url = req.url || "";
-  const method = String(req.method || "POST").toUpperCase();
-  const headers = Object.assign({}, req.headers || {});
 
-  function headerValue(name) {
-    const key = Object.keys(headers).find(k => k.toLowerCase() === name.toLowerCase());
-    return key ? String(headers[key] || "") : "";
-  }
-
-  // Prevent recursion if Shadowrocket routes the internal probe through the script chain.
-  if (headerValue("x-ytmq-probe") === "1") {
-    $done({});
-    return;
-  }
-
-  if (method !== "POST" || !/\/youtubei\/v1\/player(?:\?|$)/i.test(url)) {
-    $done({});
-    return;
-  }
-
-  let requestBody = req.bodyBytes || req.body;
-  if (requestBody instanceof ArrayBuffer) requestBody = new Uint8Array(requestBody);
-  if (!(requestBody instanceof Uint8Array) || !requestBody.length) {
-    console.log(PREFIX + " skip: no binary request body");
+  let responseBody = $response && ($response.bodyBytes || $response.body);
+  if (responseBody instanceof ArrayBuffer) responseBody = new Uint8Array(responseBody);
+  if (!(responseBody instanceof Uint8Array) || !responseBody.length) {
+    console.log(PREFIX + " skip: no binary response body");
     $done({});
     return;
   }
 
   let requestedVideoId = "";
   try { requestedVideoId = new URL(url).searchParams.get("id") || ""; } catch (_) {}
-
-  // A repeated /player request for the same video does not need another network probe.
-  // This avoids delaying normal playback after the target has already been learned.
-  if (requestedVideoId) {
-    const cached = loadTargets().find(x => x && x.videoId === requestedVideoId);
-    if (cached) {
-      console.log(PREFIX + " cache hit | video=" + requestedVideoId + " | target=" + cached.menuLabel);
-      $done({});
-      return;
-    }
-  }
 
   function toBytes(x) {
     if (x instanceof Uint8Array) return x;
@@ -215,7 +186,7 @@
     });
 
     return {
-      version: 17,
+      version: 18,
       capturedAt: Date.now(),
       resolution: maxRes,
       hdr: hdr.length > 0,
@@ -257,7 +228,7 @@
     try { list = JSON.parse($persistentStore.read(CACHE_KEY) || "[]"); } catch (_) {}
     if (!Array.isArray(list)) list = [];
     const now = Date.now();
-    return list.filter(x => x && x.version === 17 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS);
+    return list.filter(x => x && x.version === 18 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS);
   }
 
   function saveTarget(target) {
@@ -270,53 +241,33 @@
     return list.length;
   }
 
-  const probeHeaders = Object.assign({}, headers);
-  for (const k of Object.keys(probeHeaders)) {
-    const lower = k.toLowerCase();
-    if (lower === "content-length" || lower === "host") delete probeHeaders[k];
-  }
-  probeHeaders["x-ytmq-probe"] = "1";
-
-  console.log(PREFIX + " probe start | requestBody=" + requestBody.length);
-
-  $httpClient.post({
-    url,
-    headers: probeHeaders,
-    body: requestBody,
-    "binary-mode": true,
-    timeout: 10
-  }, function (error, response, data) {
-    try {
-      if (error) {
-        console.log(PREFIX + " probe error: " + String(error));
-        $done({});
-        return;
-      }
-      const status = Number((response && (response.status || response.statusCode)) || 0);
-      const bytes = toBytes(data);
-      if (!bytes || !bytes.length) {
-        console.log(PREFIX + " probe empty | status=" + status);
-        $done({});
-        return;
-      }
-      const target = parsePlayer(bytes);
-      if (!target) {
-        console.log(PREFIX + " parse miss | status=" + status + " body=" + bytes.length);
-        $done({});
-        return;
-      }
-      if (!target.videoId && requestedVideoId) target.videoId = requestedVideoId;
-      const count = saveTarget(target);
-      console.log(
-        PREFIX + " captured | video=" + (target.videoId || "?") +
-        " | target=" + target.menuLabel +
-        " | top=" + target.formats.map(f => f.itag).join(",") +
-        " | all=" + target.allFormats.length +
-        " | cache=" + count
-      );
-    } catch (e) {
-      console.log(PREFIX + " parse error: " + String(e && e.message || e));
+  try {
+    const cached = requestedVideoId ? loadTargets().find(x => x && x.videoId === requestedVideoId) : null;
+    if (cached) {
+      console.log(PREFIX + " cache hit | video=" + requestedVideoId + " | target=" + cached.menuLabel);
+      $done({});
+      return;
     }
-    $done({});
-  });
+
+    const target = parsePlayer(responseBody);
+    if (!target) {
+      console.log(PREFIX + " parse miss | body=" + responseBody.length);
+      $done({});
+      return;
+    }
+    if (!target.videoId && requestedVideoId) target.videoId = requestedVideoId;
+    const count = saveTarget(target);
+    console.log(
+      PREFIX + " observed | video=" + (target.videoId || "?") +
+      " | target=" + target.menuLabel +
+      " | top=" + target.formats.map(f => f.itag).join(",") +
+      " | all=" + target.allFormats.length +
+      " | cache=" + count +
+      " | body=" + responseBody.length
+    );
+  } catch (e) {
+    console.log(PREFIX + " parse error: " + String(e && e.message || e));
+  }
+  // Read-only observer: never modifies the /player response.
+  $done({});
 })();
