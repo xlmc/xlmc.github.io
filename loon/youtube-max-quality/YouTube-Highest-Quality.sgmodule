@@ -1,5 +1,5 @@
 #!name=YouTube去广告+最高画质
-#!desc=Shadowrocket 合并稳定版 v22。恢复 v19 已验证较好的启动与强制画质路径：单一 /player 响应脚本、本地去广告、无重复 /player、无远程 Worker；只增加一个窄修复——当视频声明 8K 等超高规格时，iOS 最高锁到 2160p 档，避免 itag 702 反复触发回退/报错。其余 SABR 行为保持 v19。
+#!desc=Shadowrocket 合并稳定版 v23。修正 v22 去广告遗漏：恢复原始 Maasea 架构里缺失的 initplayback 请求侧拦截，但不走远程 Worker——只在 ack 阶段本地返回空 200，强制回落到 v1/player，再由同一个本地 Protobuf 响应脚本清广告。最高画质继续沿用 v19 已验证路径，并保留 iOS 2160p 安全上限，避免 8K/itag 702 回退报错。
 #!author=xlmc / Maasea / nrhb11
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
 #!icon=https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
@@ -23,17 +23,21 @@ AND,((DOMAIN,youtubei.googleapis.com),(PROTOCOL,UDP)),REJECT
 (^https?:\/\/[\w-]+\.googlevideo\.com\/(?!dclk_video_ads).+?)&ctier=L(&.+?),ctier,(.+) $1$2$3 302
 
 [Map Local]
-^https?:\/\/[\w-]+\.googlevideo\.com\/(?!(dclk_video_ads|videoplayback(?:\?|\/))).+&oad data-type=text data=" " status-code=200
+# 低层 oad 广告兜底；initplayback 由下面的 request 脚本精确处理，避免重复命中。
+^https?:\/\/[\w-]+\.googlevideo\.com\/(?!(dclk_video_ads|videoplayback(?:\?|\/)|initplayback(?:\?|\/))).+&oad data-type=text data=" " status-code=200
 
 [Script]
+# initplayback 请求侧去广告：只在 ack 阶段本地空 200，复刻原模块的 fallback 行为；不使用远程 Worker。
+youtube.noads.init = type=http-request, pattern=^https:\/\/[\w-]+\.googlevideo\.com\/initplayback(?:\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-initplayback-noads-shadowrocket.js?v=23, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
+
 # 单一移动端响应链：
 # 1) 只读解析真实 /player 响应并缓存当前视频最高规格；
 # 2) 同一脚本继续执行 Maasea-derived Protobuf 去广告；
 # 3) 只有这一条脚本负责 /player 的 $done()，避免处理器冲突。
-youtube.mobile.noads.max = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-mobile-noads-max-shadowrocket.js?v=22, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
+youtube.mobile.noads.max = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-mobile-noads-max-shadowrocket.js?v=23, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
 
 # 只修改 SABR 选流请求。无额外 /player 网络请求，无 initplayback Worker。
-youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=22, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
+youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=23, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
 
 [MITM]
 hostname = %APPEND% *.googlevideo.com, youtubei.googleapis.com
