@@ -1,11 +1,11 @@
-// YouTube Max Quality - Shadowrocket SABR rewriter v17
+// YouTube Max Quality - Shadowrocket SABR rewriter v18
 // Independent quality-only implementation. It never touches ad responses.
 // Matches each SABR request against a multi-video cache captured by the /player request probe,
 // then switches the request to that video's exact highest available official quality tier.
 
 (function () {
-  const PREFIX = "[YT Max SR v17][SABR]";
-  const CACHE_KEY = "ytmq.sr.targets.v17";
+  const PREFIX = "[YT Max SR v18][SABR]";
+  const CACHE_KEY = "ytmq.sr.targets.v18";
   const TTL_MS = 5 * 60 * 1000;
 
   let body = $request && ($request.bodyBytes || $request.body);
@@ -167,7 +167,7 @@
     try { list = JSON.parse($persistentStore.read(CACHE_KEY) || "[]"); } catch (_) {}
     if (!Array.isArray(list)) list = [];
     const now = Date.now();
-    return list.filter(x => x && x.version === 17 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS && Array.isArray(x.formats) && x.formats.length && Array.isArray(x.allFormats));
+    return list.filter(x => x && x.version === 18 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS && Array.isArray(x.formats) && x.formats.length && Array.isArray(x.allFormats));
   }
 
   function collectIdentityEvidence(fields, buf) {
