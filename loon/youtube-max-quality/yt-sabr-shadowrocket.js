@@ -1,6 +1,6 @@
 // YouTube Max Quality - Shadowrocket SABR rewriter v18
 // Independent quality-only implementation. It never touches ad responses.
-// Matches each SABR request against a multi-video cache captured by the /player request probe,
+// Matches each SABR request against a multi-video cache observed from the real /player response,
 // then switches the request to that video's exact highest available official quality tier.
 
 (function () {
