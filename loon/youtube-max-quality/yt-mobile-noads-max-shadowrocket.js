@@ -1,15 +1,16 @@
-// Combined YouTube mobile response processor for Shadowrocket v19
+// Combined YouTube mobile response processor for Shadowrocket v20
 // Quality capture: xlmc. Ad response processor: Maasea-derived vendored copy from nrhb11/surge-modules
 // Source revision pinned at 3e3ad363e5c045d4aef0aa14b106f69d07e4630bb equivalent repository snapshot.
 // The capture phase never completes the request; the vendored processor below is the single $done owner.
 
-// YouTube NoAds + Max Quality - Shadowrocket target capture v19
+// YouTube NoAds + Max Quality - Shadowrocket target capture v20
 // Runs before the bundled mobile response processor in the SAME http-response script.
 // It only reads the real /player response, caches the highest tier locally, and never calls $done.
 
 (function () {
-  const PREFIX = "[YT Max SR v19][PLAYER]";
-  const CACHE_KEY = "ytmq.sr.targets.v19";
+  const PREFIX = "[YT Max SR v20][PLAYER]";
+  const CACHE_KEY = "ytmq.sr.targets.v20";
+  const ACTIVE_KEY = "ytmq.sr.active.v20";
   const MAX_TARGETS = 12;
   const TTL_MS = 5 * 60 * 1000;
 
@@ -168,7 +169,13 @@
   }
 
   function compactFormat(f) {
-    return { itag: f.itag, lastModified: f.lastModified || 0, xtags: f.xtags || "" };
+    return {
+      itag: f.itag, lastModified: f.lastModified || 0, xtags: f.xtags || "",
+      resolution: f.resolution || 0, fps: f.fps || 0, isHdr: !!f.isHdr,
+      bitrate: f.bitrate || 0, averageBitrate: f.averageBitrate || 0,
+      width: f.width || 0, height: f.height || 0,
+      qualityLabel: f.qualityLabel || "", mimeType: f.mimeType || ""
+    };
   }
 
   function chooseTarget(formats) {
@@ -191,7 +198,7 @@
     });
 
     return {
-      version: 19,
+      version: 20,
       capturedAt: Date.now(),
       resolution: maxRes,
       hdr: hdr.length > 0,
@@ -233,7 +240,12 @@
     try { list = JSON.parse($persistentStore.read(CACHE_KEY) || "[]"); } catch (_) {}
     if (!Array.isArray(list)) list = [];
     const now = Date.now();
-    return list.filter(x => x && x.version === 19 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS);
+    return list.filter(x => x && x.version === 20 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS);
+  }
+
+  function setActive(videoId) {
+    if (!videoId) return;
+    try { $persistentStore.write(JSON.stringify({ videoId, touchedAt: Date.now() }), ACTIVE_KEY); } catch (_) {}
   }
 
   function saveTarget(target) {
@@ -249,6 +261,7 @@
   try {
     const cached = requestedVideoId ? loadTargets().find(x => x && x.videoId === requestedVideoId) : null;
     if (cached) {
+      setActive(cached.videoId || requestedVideoId);
       console.log(PREFIX + " cache hit | video=" + requestedVideoId + " | target=" + cached.menuLabel);
       return;
     }
@@ -260,6 +273,7 @@
     }
     if (!target.videoId && requestedVideoId) target.videoId = requestedVideoId;
     const count = saveTarget(target);
+    setActive(target.videoId || requestedVideoId);
     console.log(
       PREFIX + " observed | video=" + (target.videoId || "?") +
       " | target=" + target.menuLabel +
