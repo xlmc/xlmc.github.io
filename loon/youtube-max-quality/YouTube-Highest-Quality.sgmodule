@@ -1,21 +1,39 @@
-#!name=YouTube最高画质
-#!desc=Shadowrocket 独立最高画质模块 v18。与去广告完全分离：不删除广告。v18 不再复制 /player 网络请求，而是在真实 /player 响应到达时只读解析 streamingData，本地缓存最高档，再由 SABR 锁定手动画质状态、selected/preferred FormatId 与 PlaybackCookie；保留 v17 的同档编码稳定与 buffered_ranges 实际缓冲验证。
-#!author=xlmc
+#!name=YouTube去广告+最高画质
+#!desc=Shadowrocket 合并优化版 v19。去广告与最高画质共用同一条 /player 响应脚本，避免两个 http-response 处理器互相覆盖；不再复制 /player 请求，也不再使用 init-stream.maasea.workers.dev。广告清理由本地 Protobuf 响应处理 + ctier/oad 规则完成；最高画质继续由 SABR 锁定并用 buffered_ranges 验证实际缓冲档位。
+#!author=xlmc / Maasea / nrhb11
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
 #!icon=https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
 #!category=YouTube
 
 [Rule]
-# 强制 YouTube 的 player/SABR 回落到可被 HTTPS MITM 脚本处理的 TCP；不包含任何广告规则。
+# YouTube 广告域名本地拒绝。
+DOMAIN-SUFFIX,doubleclick.net,REJECT
+DOMAIN-SUFFIX,googlesyndication.com,REJECT
+DOMAIN-SUFFIX,googleadservices.com,REJECT
+DOMAIN-SUFFIX,2mdn.net,REJECT
+DOMAIN-SUFFIX,googletagservices.com,REJECT
+DOMAIN,youtube-ads.l.google.com,REJECT
+
+# 让 player/SABR 可被 HTTPS MITM 脚本处理；不经过远程 Worker。
 AND,((DOMAIN-SUFFIX,googlevideo.com),(PROTOCOL,UDP)),REJECT
 AND,((DOMAIN,youtubei.googleapis.com),(PROTOCOL,UDP)),REJECT
 
-[Script]
-# 只读观察真实 /player 响应并本地解析规格；不修改响应，也不额外发起任何网络请求。
-youtube.max.player.observe = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/player(?:\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-player-target-shadowrocket.js?v=18, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
+[URL Rewrite]
+# 本地去除低层播放广告标记；普通 videoplayback 正片不做 reject。
+(^https?:\/\/[\w-]+\.googlevideo\.com\/(?!dclk_video_ads).+?)&ctier=L(&.+?),ctier,(.+) $1$2$3 302
 
-# 只修改 googlevideo SABR 选流请求；不接触 browse/next/player 响应，不与去广告 response 脚本争用。
-youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=18, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
+[Map Local]
+^https?:\/\/[\w-]+\.googlevideo\.com\/(?!(dclk_video_ads|videoplayback(?:\?|\/))).+&oad data-type=text data=" " status-code=200
+
+[Script]
+# 单一移动端响应链：
+# 1) 只读解析真实 /player 响应并缓存当前视频最高规格；
+# 2) 同一脚本继续执行 Maasea-derived Protobuf 去广告；
+# 3) 只有这一条脚本负责 /player 的 $done()，避免处理器冲突。
+youtube.mobile.noads.max = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-mobile-noads-max-shadowrocket.js?v=19, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
+
+# 只修改 SABR 选流请求。无额外 /player 网络请求，无 initplayback Worker。
+youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=19, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
 
 [MITM]
 hostname = %APPEND% *.googlevideo.com, youtubei.googleapis.com
