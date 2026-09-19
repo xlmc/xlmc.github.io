@@ -1,5 +1,5 @@
 #!name=YouTube最高画质
-#!desc=Shadowrocket 独立最高画质模块 v16。与任何 YouTube 去广告模块完全分离：不删除广告、不修改 /player 响应。旁路读取当前视频真实规格并按视频缓存；SABR 同时锁定手动画质状态、selected_format_ids、preferred_video_format_ids 与 PlaybackCookie。v16 修复首个 SABR 无 FormatId 时漏改、重复 /player 探针延迟，并记录改写前选流状态用于确认服务器是否接受最高档。
+#!desc=Shadowrocket 独立最高画质模块 v17。与 YouTube 去广告完全分离：不删除广告、不修改 /player 响应。旁路读取当前视频真实规格并按视频缓存；SABR 锁定手动画质状态、selected_format_ids、preferred_video_format_ids 与 PlaybackCookie。v17 会识别并保留服务器已选择的同档最高规格编码，避免反复在 401/313 等同档格式之间拉扯，并记录 buffered_ranges 的真实已缓冲 FormatId，直接验证实际媒体是否已经进入最高档。
 #!author=xlmc
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
 #!icon=https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
@@ -12,10 +12,10 @@ AND,((DOMAIN,youtubei.googleapis.com),(PROTOCOL,UDP)),REJECT
 
 [Script]
 # 只观察原始 /player 请求，并向同一个 YouTube /player 端点发起一次旁路副本以读取规格；不修改原请求/响应。
-youtube.max.player.probe = type=http-request, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/player(?:\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-player-target-shadowrocket.js?v=16, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
+youtube.max.player.probe = type=http-request, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/player(?:\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-player-target-shadowrocket.js?v=17, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
 
 # 只修改 googlevideo SABR 选流请求；不接触 browse/next/player 响应，不与去广告 response 脚本争用。
-youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=16, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
+youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=17, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
 
 [MITM]
 hostname = %APPEND% *.googlevideo.com, youtubei.googleapis.com
