@@ -1,5 +1,5 @@
-#!name=YouTube去广告+最高画质 v19
-#!desc=Shadowrocket 合并优化版 v19。去广告与最高画质共用同一条 /player 响应脚本，避免两个 http-response 处理器互相覆盖；不再复制 /player 请求，也不再使用 init-stream.maasea.workers.dev。广告清理由本地 Protobuf 响应处理 + ctier/oad 规则完成；最高画质继续由 SABR 锁定并用 buffered_ranges 验证实际缓冲档位。
+#!name=YouTube去广告+最高画质 v19.1
+#!desc=Shadowrocket 合并热修版 v19.1。保持 v19 的启动与最高画质逻辑不变，只修复去广告脚本因持久化缓存 JSON 损坏而在每次响应上抛出 Unexpected EOF、导致广告处理提前退出的问题。检测到损坏的 YouTubeAdvertiseInfo / YouTubeConfig 时会本地重置默认值后继续去广告。
 #!author=xlmc / Maasea / nrhb11
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
 #!icon=https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
@@ -30,7 +30,7 @@ AND,((DOMAIN,youtubei.googleapis.com),(PROTOCOL,UDP)),REJECT
 # 1) 只读解析真实 /player 响应并缓存当前视频最高规格；
 # 2) 同一脚本继续执行 Maasea-derived Protobuf 去广告；
 # 3) 只有这一条脚本负责 /player 的 $done()，避免处理器冲突。
-youtube.mobile.noads.max = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-mobile-noads-max-shadowrocket.js?v=19, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
+youtube.mobile.noads.max = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-mobile-noads-max-shadowrocket.js?v=19.1, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
 
 # 只修改 SABR 选流请求。无额外 /player 网络请求，无 initplayback Worker。
 youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=19, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
