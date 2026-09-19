@@ -1,11 +1,11 @@
-// YouTube Max Quality - Shadowrocket target probe v15
+// YouTube Max Quality - Shadowrocket target probe v16
 // Independent from ad blocking: observes the outbound /player request, performs a duplicate
 // request to the same YouTube endpoint, parses the returned player protobuf, and caches
 // several recent per-video highest-quality targets for the SABR rewriter.
 
 (function () {
-  const PREFIX = "[YT Max SR v15][PLAYER]";
-  const CACHE_KEY = "ytmq.sr.targets.v15";
+  const PREFIX = "[YT Max SR v16][PLAYER]";
+  const CACHE_KEY = "ytmq.sr.targets.v16";
   const MAX_TARGETS = 12;
   const TTL_MS = 5 * 60 * 1000;
 
@@ -36,6 +36,20 @@
     console.log(PREFIX + " skip: no binary request body");
     $done({});
     return;
+  }
+
+  let requestedVideoId = "";
+  try { requestedVideoId = new URL(url).searchParams.get("id") || ""; } catch (_) {}
+
+  // A repeated /player request for the same video does not need another network probe.
+  // This avoids delaying normal playback after the target has already been learned.
+  if (requestedVideoId) {
+    const cached = loadTargets().find(x => x && x.videoId === requestedVideoId);
+    if (cached) {
+      console.log(PREFIX + " cache hit | video=" + requestedVideoId + " | target=" + cached.menuLabel);
+      $done({});
+      return;
+    }
   }
 
   function toBytes(x) {
@@ -201,7 +215,7 @@
     });
 
     return {
-      version: 15,
+      version: 16,
       capturedAt: Date.now(),
       resolution: maxRes,
       hdr: hdr.length > 0,
@@ -243,7 +257,7 @@
     try { list = JSON.parse($persistentStore.read(CACHE_KEY) || "[]"); } catch (_) {}
     if (!Array.isArray(list)) list = [];
     const now = Date.now();
-    return list.filter(x => x && x.version === 15 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS);
+    return list.filter(x => x && x.version === 16 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS);
   }
 
   function saveTarget(target) {
@@ -291,6 +305,7 @@
         $done({});
         return;
       }
+      if (!target.videoId && requestedVideoId) target.videoId = requestedVideoId;
       const count = saveTarget(target);
       console.log(
         PREFIX + " captured | video=" + (target.videoId || "?") +
