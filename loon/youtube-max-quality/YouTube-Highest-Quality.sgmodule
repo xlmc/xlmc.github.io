@@ -1,5 +1,5 @@
 #!name=YouTube去广告+最高画质
-#!desc=Shadowrocket 合并低内存版 v24。根据 v23 日志修复真正故障点：get_watch 大响应经过完整 Protobuf 运行库时触发 Shadowrocket 内存压力并反复 cancel。v24 将 player/get_watch 改为轻量原始 Protobuf 定点处理，只删除 Player 的 adPlacements、adSlots 与 pagead tracking，并同时缓存最高安全画质；browse/next 等页面广告仍由原处理器负责。initplayback 本地 fallback 保留，无远程 Worker。
+#!desc=Shadowrocket 合并优化版 v19。去广告与最高画质共用同一条 /player 响应脚本，避免两个 http-response 处理器互相覆盖；不再复制 /player 请求，也不再使用 init-stream.maasea.workers.dev。广告清理由本地 Protobuf 响应处理 + ctier/oad 规则完成；最高画质继续由 SABR 锁定并用 buffered_ranges 验证实际缓冲档位。
 #!author=xlmc / Maasea / nrhb11
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
 #!icon=https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
@@ -23,21 +23,17 @@ AND,((DOMAIN,youtubei.googleapis.com),(PROTOCOL,UDP)),REJECT
 (^https?:\/\/[\w-]+\.googlevideo\.com\/(?!dclk_video_ads).+?)&ctier=L(&.+?),ctier,(.+) $1$2$3 302
 
 [Map Local]
-# 低层 oad 广告兜底；initplayback 由下面的 request 脚本精确处理，避免重复命中。
-^https?:\/\/[\w-]+\.googlevideo\.com\/(?!(dclk_video_ads|videoplayback(?:\?|\/)|initplayback(?:\?|\/))).+&oad data-type=text data=" " status-code=200
+^https?:\/\/[\w-]+\.googlevideo\.com\/(?!(dclk_video_ads|videoplayback(?:\?|\/))).+&oad data-type=text data=" " status-code=200
 
 [Script]
-# initplayback 请求侧去广告：只在 ack 阶段本地空 200，复刻原模块的 fallback 行为；不使用远程 Worker。
-youtube.noads.init = type=http-request, pattern=^https:\/\/[\w-]+\.googlevideo\.com\/initplayback(?:\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-initplayback-noads-shadowrocket.js?v=24, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
-
-# player/get_watch 走低内存定点处理：视频广告字段删除 + 最高画质缓存。
-youtube.core.player.watch = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(player|get_watch)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-player-watch-core-shadowrocket.js?v=24, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
-
-# browse/next/search 等页面广告继续交给成熟的 Protobuf 处理器，但不再让它处理 player/get_watch 大对象。
-youtube.mobile.noads.ui = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(browse|next|search|reel\/reel_watch_sequence|guide|account\/get_setting)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-mobile-noads-max-shadowrocket.js?v=23, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
+# 单一移动端响应链：
+# 1) 只读解析真实 /player 响应并缓存当前视频最高规格；
+# 2) 同一脚本继续执行 Maasea-derived Protobuf 去广告；
+# 3) 只有这一条脚本负责 /player 的 $done()，避免处理器冲突。
+youtube.mobile.noads.max = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-mobile-noads-max-shadowrocket.js?v=19, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
 
 # 只修改 SABR 选流请求。无额外 /player 网络请求，无 initplayback Worker。
-youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=24, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
+youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=19, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
 
 [MITM]
 hostname = %APPEND% *.googlevideo.com, youtubei.googleapis.com
