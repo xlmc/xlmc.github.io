@@ -1,12 +1,11 @@
-// YouTube Max Quality - Shadowrocket SABR rewriter v21
+// YouTube Max Quality - Shadowrocket SABR rewriter v22
 // Independent quality-only implementation. It never touches ad responses.
 // Matches each SABR request against a multi-video cache observed from the real /player response,
 // then switches the request to that video's exact highest available official quality tier.
 
 (function () {
-  const PREFIX = "[YT Max SR v21][SABR]";
-  const CACHE_KEY = "ytmq.sr.targets.v21";
-  const ACTIVE_KEY = "ytmq.sr.active.v21";
+  const PREFIX = "[YT Max SR v22][SABR]";
+  const CACHE_KEY = "ytmq.sr.targets.v22";
   const TTL_MS = 5 * 60 * 1000;
 
   let body = $request && ($request.bodyBytes || $request.body);
@@ -168,7 +167,7 @@
     try { list = JSON.parse($persistentStore.read(CACHE_KEY) || "[]"); } catch (_) {}
     if (!Array.isArray(list)) list = [];
     const now = Date.now();
-    return list.filter(x => x && x.version === 21 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS && Array.isArray(x.formats) && x.formats.length && Array.isArray(x.allFormats));
+    return list.filter(x => x && x.version === 22 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS && Array.isArray(x.formats) && x.formats.length && Array.isArray(x.allFormats));
   }
 
   function collectIdentityEvidence(fields, buf) {
@@ -248,92 +247,6 @@
     return out;
   }
 
-  function findAnyFormat(target, ids) {
-    if (!target || !Array.isArray(target.allFormats)) return null;
-    for (const id of ids || []) {
-      let best = null, bestScore = 0;
-      for (const f of target.allFormats) {
-        const s = matchScore(id, f);
-        if (s > bestScore) { bestScore = s; best = f; }
-      }
-      if (bestScore >= 5) return best;
-    }
-    return null;
-  }
-
-  function codecFamily(format) {
-    const mime = String(format && format.mimeType || "").toLowerCase();
-    const m = /codecs?="?([^",;\s]+)/i.exec(mime);
-    const codec = m ? m[1] : mime;
-    if (codec.includes("av01")) return "av1";
-    if (codec.includes("vp09") || codec.includes("vp9")) return "vp9";
-    if (codec.includes("avc1") || codec.includes("h264")) return "h264";
-    if (codec.includes("hvc1") || codec.includes("hev1") || codec.includes("hevc")) return "hevc";
-    return codec || "unknown";
-  }
-
-  function nativeLockTarget(target, nativeFormat) {
-    if (!nativeFormat || !Number(nativeFormat.resolution)) return null;
-    const family = codecFamily(nativeFormat);
-    const res = Number(nativeFormat.resolution);
-    const hdr = !!nativeFormat.isHdr;
-    const fps = Number(nativeFormat.fps || 0);
-
-    let pool = (target.allFormats || []).filter(f =>
-      Number(f.resolution) === res &&
-      codecFamily(f) === family &&
-      (!!f.isHdr === hdr)
-    );
-    if (!pool.length) {
-      pool = (target.allFormats || []).filter(f =>
-        Number(f.resolution) === res && codecFamily(f) === family
-      );
-    }
-    if (!pool.length) pool = [nativeFormat];
-
-    if (fps) {
-      const sameFps = pool.filter(f => Number(f.fps || 0) === fps);
-      if (sameFps.length) pool = sameFps;
-    }
-
-    pool.sort((a,b) => Number(b.averageBitrate || b.bitrate || 0) - Number(a.averageBitrate || a.bitrate || 0));
-    const maxBitrate = pool[0] ? Number(pool[0].averageBitrate || pool[0].bitrate || 0) : 0;
-    return Object.assign({}, target, {
-      resolution: res,
-      hdr,
-      fps,
-      maxBitrate,
-      menuLabel: res + "p" + (fps > 30 ? String(Math.round(fps)) : "") + (hdr ? " HDR" : "") + " native",
-      formats: pool.slice(0, 6)
-    });
-  }
-
-  function compatibleTarget(target, nativeFormat) {
-    if (!nativeFormat || !Number(nativeFormat.resolution)) return target;
-    const res = Number(nativeFormat.resolution);
-    let pool = (target.allFormats || []).filter(f => Number(f.resolution) === res);
-    if (!pool.length) return target;
-    if (nativeFormat.isHdr) {
-      const hdr = pool.filter(f => !!f.isHdr);
-      if (hdr.length) pool = hdr;
-    }
-    const fps = Number(nativeFormat.fps || 0);
-    if (fps) {
-      const sameFps = pool.filter(f => Number(f.fps || 0) === fps);
-      if (sameFps.length) pool = sameFps;
-    }
-    pool.sort((a,b) => (Number(b.averageBitrate || b.bitrate || 0) - Number(a.averageBitrate || a.bitrate || 0)));
-    const maxBitrate = pool[0] ? Number(pool[0].averageBitrate || pool[0].bitrate || 0) : 0;
-    return Object.assign({}, target, {
-      resolution: res,
-      hdr: !!nativeFormat.isHdr,
-      fps: fps,
-      maxBitrate,
-      menuLabel: res + "p" + (fps > 30 ? String(Math.round(fps)) : "") + (nativeFormat.isHdr ? " HDR" : "") + " compat",
-      formats: pool.slice(0, 6)
-    });
-  }
-
   function findTopFormat(target, ids) {
     if (!target || !Array.isArray(target.formats)) return null;
     for (const id of ids || []) {
@@ -342,15 +255,6 @@
       }
     }
     return null;
-  }
-
-  function findActiveTarget(targets) {
-    try {
-      const active = JSON.parse($persistentStore.read(ACTIVE_KEY) || "null");
-      if (!active || !active.videoId || !active.touchedAt || Date.now() - Number(active.touchedAt) > 8000) return null;
-      const target = targets.find(x => x && x.videoId === active.videoId);
-      return target ? { target, score: 0 } : null;
-    } catch (_) { return null; }
   }
 
   function findRecentTarget(targets) {
@@ -386,50 +290,6 @@
   function targetContains(target, id) {
     for (const f of target.allFormats) if (matchScore(id, f) >= 5) return true;
     return false;
-  }
-
-  function rewriteClientAbrStatePrime(payload) {
-    const fields = parseFields(payload, 0, payload.length);
-    let currentBandwidth = 0;
-    for (const f of fields) {
-      if (f.field === 23 && f.wire === 0) currentBandwidth = Math.max(currentBandwidth, Number(f.value || 0));
-    }
-    const replacements = {
-      23: Math.max(currentBandwidth, 500000000), // generous estimate, no codec/format forcing
-      26: 1,                                     // HIGHER_QUALITY, not manual ADVANCED_MENU
-      30: 0,                                     // data_saver_mode=false
-      32: 1                                      // UNMETERED
-    };
-    const done = Object.create(null), chunks = [];
-    for (const f of fields) {
-      if (f.field === 20 && f.wire === 0) continue; // remove bitrate ceiling only
-      if (Object.prototype.hasOwnProperty.call(replacements, f.field) && f.wire === 0) {
-        if (!done[f.field]) {
-          chunks.push(varField(f.field, replacements[f.field]));
-          done[f.field] = true;
-        }
-      } else chunks.push(f.raw);
-    }
-    for (const k of Object.keys(replacements)) {
-      const n = Number(k);
-      if (!done[n]) chunks.push(varField(n, replacements[n]));
-    }
-    return concat(chunks);
-  }
-
-  function primeRequest(buf) {
-    const fields = parseFields(buf, 0, buf.length);
-    const chunks = [];
-    let sawClient = false;
-    for (const f of fields) {
-      if (f.field === 1 && f.wire === 2) {
-        chunks.push(bytesField(1, rewriteClientAbrStatePrime(buf.slice(f.dataStart, f.dataEnd))));
-        sawClient = true;
-      } else {
-        chunks.push(f.raw);
-      }
-    }
-    return sawClient ? concat(chunks) : null;
   }
 
   function rewriteClientAbrState(payload, target) {
@@ -587,12 +447,8 @@
     let matched = findTarget(targets, evidence);
     let matchKind = "strong";
     if (!matched && evidence.length === 0) {
-      matched = findActiveTarget(targets);
-      if (matched) matchKind = "active";
-      else {
-        matched = findRecentTarget(targets);
-        if (matched) matchKind = "recent";
-      }
+      matched = findRecentTarget(targets);
+      if (matched) matchKind = "recent";
     }
     if (!matched) {
       console.log(
@@ -607,27 +463,7 @@
     }
 
     const target = matched.target;
-    const nativeVideo = findAnyFormat(target, beforeSelected) || findAnyFormat(target, beforeBuffered);
-
-    // Do not force an advertised format before the client proves it can actually use one.
-    // First SABR request only gets a safe "higher quality" ABR prime; selected/preferred/cookie stay native.
-    if (!nativeVideo) {
-      const primed = primeRequest(body);
-      console.log(
-        PREFIX + " prime | video=" + (target.videoId || "?") +
-        " | target=" + target.menuLabel +
-        " | match=" + matchKind +
-        " | reason=no-native-video-format"
-      );
-      $done(primed ? { body: primed } : {});
-      return;
-    }
-
-    // Once YouTube exposes the actual client-selected/buffered video format, lock that
-    // resolution/codec/HDR tier. This prevents advertised-but-unsupported 8K/AV1 formats
-    // from causing retry loops or playback errors.
-    const effectiveTarget = nativeLockTarget(target, nativeVideo) || compatibleTarget(target, nativeVideo);
-    const rewritten = rewriteRequest(body, effectiveTarget, beforeSelected, beforeBuffered);
+    const rewritten = rewriteRequest(body, target, beforeSelected, beforeBuffered);
     if (!rewritten) {
       console.log(PREFIX + " miss: unknown SABR shape | video=" + (target.videoId || "?") + " | target=" + target.menuLabel);
       $done({});
@@ -637,8 +473,6 @@
     console.log(
       PREFIX + " forced | video=" + (target.videoId || "?") +
       " | target=" + target.menuLabel +
-      " | effective=" + effectiveTarget.menuLabel +
-      " | codec=" + codecFamily(nativeVideo) +
       " | match=" + matchKind +
       " | score=" + matched.score +
       " | beforeSelected=" + (beforeSelected.map(identityString).join(",") || "-") +
