@@ -1,11 +1,12 @@
-// YouTube Max Quality - Shadowrocket SABR rewriter v19
+// YouTube Max Quality - Shadowrocket SABR rewriter v20
 // Independent quality-only implementation. It never touches ad responses.
 // Matches each SABR request against a multi-video cache observed from the real /player response,
 // then switches the request to that video's exact highest available official quality tier.
 
 (function () {
-  const PREFIX = "[YT Max SR v19][SABR]";
-  const CACHE_KEY = "ytmq.sr.targets.v19";
+  const PREFIX = "[YT Max SR v20][SABR]";
+  const CACHE_KEY = "ytmq.sr.targets.v20";
+  const ACTIVE_KEY = "ytmq.sr.active.v20";
   const TTL_MS = 5 * 60 * 1000;
 
   let body = $request && ($request.bodyBytes || $request.body);
@@ -167,7 +168,7 @@
     try { list = JSON.parse($persistentStore.read(CACHE_KEY) || "[]"); } catch (_) {}
     if (!Array.isArray(list)) list = [];
     const now = Date.now();
-    return list.filter(x => x && x.version === 19 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS && Array.isArray(x.formats) && x.formats.length && Array.isArray(x.allFormats));
+    return list.filter(x => x && x.version === 20 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS && Array.isArray(x.formats) && x.formats.length && Array.isArray(x.allFormats));
   }
 
   function collectIdentityEvidence(fields, buf) {
@@ -247,6 +248,45 @@
     return out;
   }
 
+  function findAnyFormat(target, ids) {
+    if (!target || !Array.isArray(target.allFormats)) return null;
+    for (const id of ids || []) {
+      let best = null, bestScore = 0;
+      for (const f of target.allFormats) {
+        const s = matchScore(id, f);
+        if (s > bestScore) { bestScore = s; best = f; }
+      }
+      if (bestScore >= 5) return best;
+    }
+    return null;
+  }
+
+  function compatibleTarget(target, nativeFormat) {
+    if (!nativeFormat || !Number(nativeFormat.resolution)) return target;
+    const res = Number(nativeFormat.resolution);
+    let pool = (target.allFormats || []).filter(f => Number(f.resolution) === res);
+    if (!pool.length) return target;
+    if (nativeFormat.isHdr) {
+      const hdr = pool.filter(f => !!f.isHdr);
+      if (hdr.length) pool = hdr;
+    }
+    const fps = Number(nativeFormat.fps || 0);
+    if (fps) {
+      const sameFps = pool.filter(f => Number(f.fps || 0) === fps);
+      if (sameFps.length) pool = sameFps;
+    }
+    pool.sort((a,b) => (Number(b.averageBitrate || b.bitrate || 0) - Number(a.averageBitrate || a.bitrate || 0)));
+    const maxBitrate = pool[0] ? Number(pool[0].averageBitrate || pool[0].bitrate || 0) : 0;
+    return Object.assign({}, target, {
+      resolution: res,
+      hdr: !!nativeFormat.isHdr,
+      fps: fps,
+      maxBitrate,
+      menuLabel: res + "p" + (fps > 30 ? String(Math.round(fps)) : "") + (nativeFormat.isHdr ? " HDR" : "") + " compat",
+      formats: pool.slice(0, 6)
+    });
+  }
+
   function findTopFormat(target, ids) {
     if (!target || !Array.isArray(target.formats)) return null;
     for (const id of ids || []) {
@@ -255,6 +295,15 @@
       }
     }
     return null;
+  }
+
+  function findActiveTarget(targets) {
+    try {
+      const active = JSON.parse($persistentStore.read(ACTIVE_KEY) || "null");
+      if (!active || !active.videoId || !active.touchedAt || Date.now() - Number(active.touchedAt) > 8000) return null;
+      const target = targets.find(x => x && x.videoId === active.videoId);
+      return target ? { target, score: 0 } : null;
+    } catch (_) { return null; }
   }
 
   function findRecentTarget(targets) {
@@ -447,8 +496,12 @@
     let matched = findTarget(targets, evidence);
     let matchKind = "strong";
     if (!matched && evidence.length === 0) {
-      matched = findRecentTarget(targets);
-      if (matched) matchKind = "recent";
+      matched = findActiveTarget(targets);
+      if (matched) matchKind = "active";
+      else {
+        matched = findRecentTarget(targets);
+        if (matched) matchKind = "recent";
+      }
     }
     if (!matched) {
       console.log(
@@ -463,7 +516,16 @@
     }
 
     const target = matched.target;
-    const rewritten = rewriteRequest(body, target, beforeSelected, beforeBuffered);
+    let effectiveTarget = target;
+    const nativeBuffered = findAnyFormat(target, beforeBuffered) || findAnyFormat(target, beforeSelected);
+    if (
+      nativeBuffered && Number(nativeBuffered.resolution || 0) > 0 &&
+      Number(nativeBuffered.resolution) < Number(target.resolution || 0) &&
+      Date.now() - Number(target.capturedAt || 0) >= 5000
+    ) {
+      effectiveTarget = compatibleTarget(target, nativeBuffered);
+    }
+    const rewritten = rewriteRequest(body, effectiveTarget, beforeSelected, beforeBuffered);
     if (!rewritten) {
       console.log(PREFIX + " miss: unknown SABR shape | video=" + (target.videoId || "?") + " | target=" + target.menuLabel);
       $done({});
@@ -473,6 +535,7 @@
     console.log(
       PREFIX + " forced | video=" + (target.videoId || "?") +
       " | target=" + target.menuLabel +
+      " | effective=" + effectiveTarget.menuLabel +
       " | match=" + matchKind +
       " | score=" + matched.score +
       " | beforeSelected=" + (beforeSelected.map(identityString).join(",") || "-") +
