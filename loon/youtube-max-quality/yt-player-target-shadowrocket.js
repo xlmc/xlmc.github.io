@@ -1,11 +1,11 @@
-// YouTube Max Quality - Shadowrocket target probe v16
+// YouTube Max Quality - Shadowrocket target probe v17
 // Independent from ad blocking: observes the outbound /player request, performs a duplicate
 // request to the same YouTube endpoint, parses the returned player protobuf, and caches
 // several recent per-video highest-quality targets for the SABR rewriter.
 
 (function () {
-  const PREFIX = "[YT Max SR v16][PLAYER]";
-  const CACHE_KEY = "ytmq.sr.targets.v16";
+  const PREFIX = "[YT Max SR v17][PLAYER]";
+  const CACHE_KEY = "ytmq.sr.targets.v17";
   const MAX_TARGETS = 12;
   const TTL_MS = 5 * 60 * 1000;
 
@@ -215,7 +215,7 @@
     });
 
     return {
-      version: 16,
+      version: 17,
       capturedAt: Date.now(),
       resolution: maxRes,
       hdr: hdr.length > 0,
@@ -257,7 +257,7 @@
     try { list = JSON.parse($persistentStore.read(CACHE_KEY) || "[]"); } catch (_) {}
     if (!Array.isArray(list)) list = [];
     const now = Date.now();
-    return list.filter(x => x && x.version === 16 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS);
+    return list.filter(x => x && x.version === 17 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS);
   }
 
   function saveTarget(target) {
