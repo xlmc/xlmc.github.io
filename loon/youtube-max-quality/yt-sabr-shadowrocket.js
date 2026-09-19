@@ -1,11 +1,11 @@
-// YouTube Max Quality - Shadowrocket SABR rewriter v16
+// YouTube Max Quality - Shadowrocket SABR rewriter v17
 // Independent quality-only implementation. It never touches ad responses.
 // Matches each SABR request against a multi-video cache captured by the /player request probe,
 // then switches the request to that video's exact highest available official quality tier.
 
 (function () {
-  const PREFIX = "[YT Max SR v16][SABR]";
-  const CACHE_KEY = "ytmq.sr.targets.v16";
+  const PREFIX = "[YT Max SR v17][SABR]";
+  const CACHE_KEY = "ytmq.sr.targets.v17";
   const TTL_MS = 5 * 60 * 1000;
 
   let body = $request && ($request.bodyBytes || $request.body);
@@ -167,7 +167,7 @@
     try { list = JSON.parse($persistentStore.read(CACHE_KEY) || "[]"); } catch (_) {}
     if (!Array.isArray(list)) list = [];
     const now = Date.now();
-    return list.filter(x => x && x.version === 16 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS && Array.isArray(x.formats) && x.formats.length && Array.isArray(x.allFormats));
+    return list.filter(x => x && x.version === 17 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS && Array.isArray(x.formats) && x.formats.length && Array.isArray(x.allFormats));
   }
 
   function collectIdentityEvidence(fields, buf) {
@@ -229,6 +229,32 @@
       } catch (_) {}
     }
     return out;
+  }
+
+  function collectBufferedIds(fields, buf) {
+    const out = [];
+    for (const f of fields) {
+      if (f.field !== 3 || f.wire !== 2) continue;
+      try {
+        const range = buf.slice(f.dataStart, f.dataEnd);
+        for (const rf of parseFields(range, 0, range.length)) {
+          if (rf.field !== 1 || rf.wire !== 2) continue;
+          const id = parseFormatId(range.slice(rf.dataStart, rf.dataEnd));
+          if (id.itag) out.push(id);
+        }
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  function findTopFormat(target, ids) {
+    if (!target || !Array.isArray(target.formats)) return null;
+    for (const id of ids || []) {
+      for (const f of target.formats) {
+        if (matchScore(id, f) >= 5) return f;
+      }
+    }
+    return null;
   }
 
   function findRecentTarget(targets) {
@@ -348,14 +374,16 @@
     return concat(chunks);
   }
 
-  function rewriteRequest(buf, target) {
+  function rewriteRequest(buf, target, beforeSelected, beforeBuffered) {
     const fields = parseFields(buf, 0, buf.length);
     const topFormats = target.formats.filter(f => f && Number(f.itag));
-    const best = topFormats[0];
+    const nativeTop = findTopFormat(target, beforeSelected) || findTopFormat(target, beforeBuffered);
+    const best = nativeTop || topFormats[0];
     if (!best) return null;
 
+    const hadTopBefore = !!nativeTop;
     const chunks = [];
-    let sawClient = false, wrotePreferred = false, switchedSelectedVideo = false;
+    let sawClient = false, wrotePreferred = false, switchedSelectedVideo = false, sawTargetVideo = false;
 
     for (const f of fields) {
       if (f.field === 1 && f.wire === 2) {
@@ -367,7 +395,10 @@
         let id = null;
         try { id = parseFormatId(buf.slice(f.dataStart, f.dataEnd)); } catch (_) {}
         if (id && targetContains(target, id)) {
+          sawTargetVideo = true;
           if (!switchedSelectedVideo) {
+            // If YouTube already selected another codec in the same highest tier, keep that
+            // exact server-compatible format instead of fighting it back to topFormats[0].
             chunks.push(bytesField(2, formatIdMessage(best)));
             switchedSelectedVideo = true;
           }
@@ -394,7 +425,7 @@
     }
     return {
       body: concat(chunks),
-      selectedSwitched: switchedSelectedVideo,
+      selectedMode: hadTopBefore ? "already-top" : (sawTargetVideo && switchedSelectedVideo ? "switched" : "not-found"),
       preferred: topFormats.map(f => f.itag),
       cookie: best.itag
     };
@@ -412,6 +443,7 @@
     const evidence = collectIdentityEvidence(fields, body);
     const beforeSelected = collectTopLevelIds(fields, body, 2);
     const beforePvi = collectTopLevelIds(fields, body, 17);
+    const beforeBuffered = collectBufferedIds(fields, body);
     let matched = findTarget(targets, evidence);
     let matchKind = "strong";
     if (!matched && evidence.length === 0) {
@@ -423,6 +455,7 @@
         PREFIX + " miss: no target match | cache=" + targets.length +
         " | evidence=" + evidence.slice(0, 8).map(identityString).join(",") +
         " | selected=" + beforeSelected.map(identityString).join(",") +
+        " | buffered=" + beforeBuffered.map(identityString).join(",") +
         " | pvi=" + beforePvi.map(identityString).join(",")
       );
       $done({});
@@ -430,7 +463,7 @@
     }
 
     const target = matched.target;
-    const rewritten = rewriteRequest(body, target);
+    const rewritten = rewriteRequest(body, target, beforeSelected, beforeBuffered);
     if (!rewritten) {
       console.log(PREFIX + " miss: unknown SABR shape | video=" + (target.videoId || "?") + " | target=" + target.menuLabel);
       $done({});
@@ -443,8 +476,9 @@
       " | match=" + matchKind +
       " | score=" + matched.score +
       " | beforeSelected=" + (beforeSelected.map(identityString).join(",") || "-") +
+      " | beforeBuffered=" + (beforeBuffered.map(identityString).join(",") || "-") +
       " | beforePvi=" + (beforePvi.map(identityString).join(",") || "-") +
-      " | selected=" + (rewritten.selectedSwitched ? "switched" : "not-found") +
+      " | selected=" + rewritten.selectedMode +
       " | pvi=" + rewritten.preferred.join(",") +
       " | cookie=" + rewritten.cookie +
       " | body=" + body.length + "->" + rewritten.body.length
