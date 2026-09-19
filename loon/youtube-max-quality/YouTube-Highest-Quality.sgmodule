@@ -1,5 +1,5 @@
 #!name=YouTube去广告+最高画质
-#!desc=Shadowrocket 合并优化版 v20。单一 /player 响应脚本同时完成去广告与最高规格缓存，不复制 /player、不调用远程 Worker。v20 进一步把 initplayback 本地立即返回空 200，直接回落到 /player，去掉日志中约 2 秒初始化等待；SABR 使用 active-video 绑定避免多缓存首包 miss，并在设备持续拒绝更高不可解码档位时自动收敛到客户端实际可用的最高兼容档。
+#!desc=Shadowrocket 合并稳定版 v21。单一 /player 响应脚本同时完成本地去广告与最高规格缓存，不复制 /player、不调用远程 Worker。v21 撤回对 initplayback 的激进本地短路：播放握手保持原生；首个 SABR 只做安全的 Higher Quality/Unmetered 提示，不强塞具体 FormatId，待客户端暴露实际可用视频格式后再锁定同分辨率/编码/HDR档，避免 8K/AV1 等“服务端有、设备不能播”的格式导致报错和重试。
 #!author=xlmc / Maasea / nrhb11
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/loon/youtube-max-quality
 #!icon=https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
@@ -23,20 +23,18 @@ AND,((DOMAIN,youtubei.googleapis.com),(PROTOCOL,UDP)),REJECT
 (^https?:\/\/[\w-]+\.googlevideo\.com\/(?!dclk_video_ads).+?)&ctier=L(&.+?),ctier,(.+) $1$2$3 302
 
 [Map Local]
-# initplayback 本地立即结束，让客户端直接回落到 /player；避免 Onesie/Worker 初始化等待。
-^https?:\/\/[\w-]+\.googlevideo\.com\/initplayback(?:\?|$) data-type=text data="" status-code=200
-
-^https?:\/\/[\w-]+\.googlevideo\.com\/(?!(dclk_video_ads|videoplayback(?:\?|\/))).+&oad data-type=text data=" " status-code=200
+# 只拦截明确的 oad 广告资源；排除 videoplayback 与 initplayback，避免破坏播放握手。
+^https?:\/\/[\w-]+\.googlevideo\.com\/(?!(dclk_video_ads|videoplayback(?:\?|\/)|initplayback(?:\?|\/))).+&oad data-type=text data=" " status-code=200
 
 [Script]
 # 单一移动端响应链：
 # 1) 只读解析真实 /player 响应并缓存当前视频最高规格；
 # 2) 同一脚本继续执行 Maasea-derived Protobuf 去广告；
 # 3) 只有这一条脚本负责 /player 的 $done()，避免处理器冲突。
-youtube.mobile.noads.max = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-mobile-noads-max-shadowrocket.js?v=20, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
+youtube.mobile.noads.max = type=http-response, pattern=^https:\/\/youtubei\.googleapis\.com\/youtubei\/v1\/(browse|next|player|search|reel\/reel_watch_sequence|guide|account\/get_setting|get_watch)(\?.*)?$, script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-mobile-noads-max-shadowrocket.js?v=21, requires-body=true, binary-body-mode=true, max-size=0, engine=auto
 
-# 只修改 SABR 选流请求。无额外 /player 网络请求；active-video 绑定 + 最高兼容档自动收敛。
-youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=20, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
+# 只修改 SABR 选流请求。首包安全 prime，随后按客户端实际可用编码/分辨率锁定，优先稳定播放。
+youtube.max.sabr = type=http-request, pattern=^https:\/\/[^/]+\.googlevideo\.com\/videoplayback(?:\?|\/|$), script-path=https://raw.githubusercontent.com/xlmc/xlmc.github.io/main/loon/youtube-max-quality/yt-sabr-shadowrocket.js?v=21, requires-body=true, binary-body-mode=true, max-size=-1, engine=auto
 
 [MITM]
 hostname = %APPEND% *.googlevideo.com, youtubei.googleapis.com
