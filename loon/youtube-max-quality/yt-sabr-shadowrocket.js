@@ -1,11 +1,11 @@
-// YouTube Max Quality - Shadowrocket SABR rewriter v15
+// YouTube Max Quality - Shadowrocket SABR rewriter v16
 // Independent quality-only implementation. It never touches ad responses.
 // Matches each SABR request against a multi-video cache captured by the /player request probe,
 // then switches the request to that video's exact highest available official quality tier.
 
 (function () {
-  const PREFIX = "[YT Max SR v15][SABR]";
-  const CACHE_KEY = "ytmq.sr.targets.v15";
+  const PREFIX = "[YT Max SR v16][SABR]";
+  const CACHE_KEY = "ytmq.sr.targets.v16";
   const TTL_MS = 5 * 60 * 1000;
 
   let body = $request && ($request.bodyBytes || $request.body);
@@ -167,7 +167,7 @@
     try { list = JSON.parse($persistentStore.read(CACHE_KEY) || "[]"); } catch (_) {}
     if (!Array.isArray(list)) list = [];
     const now = Date.now();
-    return list.filter(x => x && x.version === 15 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS && Array.isArray(x.formats) && x.formats.length && Array.isArray(x.allFormats));
+    return list.filter(x => x && x.version === 16 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS && Array.isArray(x.formats) && x.formats.length && Array.isArray(x.allFormats));
   }
 
   function collectIdentityEvidence(fields, buf) {
@@ -217,6 +217,29 @@
       }
     }
     return ids;
+  }
+
+  function collectTopLevelIds(fields, buf, fieldNo) {
+    const out = [];
+    for (const f of fields) {
+      if (f.field !== fieldNo || f.wire !== 2) continue;
+      try {
+        const id = parseFormatId(buf.slice(f.dataStart, f.dataEnd));
+        if (id.itag) out.push(id);
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  function findRecentTarget(targets) {
+    const now = Date.now();
+    const recent = targets
+      .filter(x => x && x.capturedAt && now - Number(x.capturedAt) <= 8000)
+      .sort((a, b) => Number(b.capturedAt) - Number(a.capturedAt));
+    // Use temporal fallback only when exactly one freshly captured video exists.
+    // This fixes the first SABR request (which often has no FormatId evidence) without
+    // risking a wrong match when YouTube preloads multiple videos at once.
+    return recent.length === 1 ? { target: recent[0], score: 0 } : null;
   }
 
   function findTarget(targets, evidence) {
@@ -387,11 +410,20 @@
 
     const fields = parseFields(body, 0, body.length);
     const evidence = collectIdentityEvidence(fields, body);
-    const matched = findTarget(targets, evidence);
+    const beforeSelected = collectTopLevelIds(fields, body, 2);
+    const beforePvi = collectTopLevelIds(fields, body, 17);
+    let matched = findTarget(targets, evidence);
+    let matchKind = "strong";
+    if (!matched && evidence.length === 0) {
+      matched = findRecentTarget(targets);
+      if (matched) matchKind = "recent";
+    }
     if (!matched) {
       console.log(
-        PREFIX + " miss: no strong target match | cache=" + targets.length +
-        " | evidence=" + evidence.slice(0, 8).map(identityString).join(",")
+        PREFIX + " miss: no target match | cache=" + targets.length +
+        " | evidence=" + evidence.slice(0, 8).map(identityString).join(",") +
+        " | selected=" + beforeSelected.map(identityString).join(",") +
+        " | pvi=" + beforePvi.map(identityString).join(",")
       );
       $done({});
       return;
@@ -408,7 +440,10 @@
     console.log(
       PREFIX + " forced | video=" + (target.videoId || "?") +
       " | target=" + target.menuLabel +
+      " | match=" + matchKind +
       " | score=" + matched.score +
+      " | beforeSelected=" + (beforeSelected.map(identityString).join(",") || "-") +
+      " | beforePvi=" + (beforePvi.map(identityString).join(",") || "-") +
       " | selected=" + (rewritten.selectedSwitched ? "switched" : "not-found") +
       " | pvi=" + rewritten.preferred.join(",") +
       " | cookie=" + rewritten.cookie +
