@@ -1,18 +1,17 @@
-// Combined YouTube mobile response processor for Shadowrocket v23
+// Combined YouTube mobile response processor for Shadowrocket v19
 // Quality capture: xlmc. Ad response processor: Maasea-derived vendored copy from nrhb11/surge-modules
 // Source revision pinned at 3e3ad363e5c045d4aef0aa14b106f69d07e4630bb equivalent repository snapshot.
 // The capture phase never completes the request; the vendored processor below is the single $done owner.
 
-// YouTube NoAds + Max Quality - Shadowrocket target capture v23
+// YouTube NoAds + Max Quality - Shadowrocket target capture v19
 // Runs before the bundled mobile response processor in the SAME http-response script.
 // It only reads the real /player response, caches the highest tier locally, and never calls $done.
 
 (function () {
-  const PREFIX = "[YT Max SR v23][PLAYER]";
-  const CACHE_KEY = "ytmq.sr.targets.v23";
+  const PREFIX = "[YT Max SR v19][PLAYER]";
+  const CACHE_KEY = "ytmq.sr.targets.v19";
   const MAX_TARGETS = 12;
   const TTL_MS = 5 * 60 * 1000;
-  const MAX_SAFE_RESOLUTION = 2160;
 
   const req = $request || {};
   const url = req.url || "";
@@ -174,13 +173,9 @@
 
   function chooseTarget(formats) {
     if (!formats.length) return null;
-    // v19 behavior is preserved, except iOS is capped at the highest <=2160p tier.
-    // This avoids forcing advertised 8K/itag 702 that the client repeatedly fell back from.
-    const safeFormats = formats.filter(f => Number(f.resolution || 0) <= MAX_SAFE_RESOLUTION);
-    const candidates = safeFormats.length ? safeFormats : formats;
     let maxRes = 0;
-    for (const f of candidates) if (f.resolution > maxRes) maxRes = f.resolution;
-    let pool = candidates.filter(f => f.resolution === maxRes);
+    for (const f of formats) if (f.resolution > maxRes) maxRes = f.resolution;
+    let pool = formats.filter(f => f.resolution === maxRes);
 
     const hdr = pool.filter(f => f.isHdr);
     if (hdr.length) pool = hdr;
@@ -196,7 +191,7 @@
     });
 
     return {
-      version: 23,
+      version: 19,
       capturedAt: Date.now(),
       resolution: maxRes,
       hdr: hdr.length > 0,
@@ -238,7 +233,7 @@
     try { list = JSON.parse($persistentStore.read(CACHE_KEY) || "[]"); } catch (_) {}
     if (!Array.isArray(list)) list = [];
     const now = Date.now();
-    return list.filter(x => x && x.version === 23 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS);
+    return list.filter(x => x && x.version === 19 && x.capturedAt && now - Number(x.capturedAt) <= TTL_MS);
   }
 
   function saveTarget(target) {
