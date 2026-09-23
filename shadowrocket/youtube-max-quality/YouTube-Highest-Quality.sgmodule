@@ -1,5 +1,5 @@
-#!name=YouTube去广告+最高画质 v19.2
-#!desc=Shadowrocket 合并热修版 v19.2。保持 v19 的播放与最高画质逻辑不变；修复 Shadowrocket 将空 $argument 传入 Maasea 响应处理器时触发 JSON Parse error: Unexpected EOF、导致去广告逻辑在 /player、/next、/browse 等响应上提前退出的问题。
+#!name=YouTube去广告+最高画质 v19.3
+#!desc=Shadowrocket v19.3 诊断版。保持 v19.2 的播放、最高画质与去广告行为不变，只增加诊断日志：同视频短时间重复 /player、>2160p/itag702 风险目标、SABR fallback_count、强制选流状态，以及各 YouTube API 去广告响应是否实际生成修改后的 body。
 #!author=xlmc / Maasea / nrhb11
 #!homepage=https://github.com/xlmc/xlmc.github.io/tree/main/shadowrocket/youtube-max-quality
 #!icon=https://www.youtube.com/s/desktop/d4c4d43f/img/favicon_144x144.png
