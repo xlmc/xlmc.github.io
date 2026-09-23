@@ -22,6 +22,10 @@
     return;
   }
 
+  const DIAG_FALLBACK = query("fallback_count");
+  const DIAG_RN = query("rn");
+  const DIAG_CPN = query("cpn");
+
   function readVarint(buf, pos, end) {
     let value = 0, mul = 1, count = 0;
     while (pos < end && count < 10) {
@@ -456,8 +460,14 @@
         " | evidence=" + evidence.slice(0, 8).map(identityString).join(",") +
         " | selected=" + beforeSelected.map(identityString).join(",") +
         " | buffered=" + beforeBuffered.map(identityString).join(",") +
-        " | pvi=" + beforePvi.map(identityString).join(",")
+        " | pvi=" + beforePvi.map(identityString).join(",") +
+        " | fallback=" + (DIAG_FALLBACK || "0") +
+        " | rn=" + (DIAG_RN || "-") +
+        " | cpn=" + (DIAG_CPN || "-")
       );
+      if (DIAG_FALLBACK) {
+        console.log("[YT Diag SR v19.3][FALLBACK] no-target-match | fallback_count=" + DIAG_FALLBACK + " | rn=" + (DIAG_RN || "-") + " | cpn=" + (DIAG_CPN || "-"));
+      }
       $done({});
       return;
     }
@@ -481,8 +491,17 @@
       " | selected=" + rewritten.selectedMode +
       " | pvi=" + rewritten.preferred.join(",") +
       " | cookie=" + rewritten.cookie +
+      " | fallback=" + (DIAG_FALLBACK || "0") +
+      " | rn=" + (DIAG_RN || "-") +
+      " | cpn=" + (DIAG_CPN || "-") +
       " | body=" + body.length + "->" + rewritten.body.length
     );
+    if (DIAG_FALLBACK) {
+      console.log("[YT Diag SR v19.3][FALLBACK] video=" + (target.videoId || "?") + " | target=" + target.menuLabel + " | fallback_count=" + DIAG_FALLBACK + " | selected=" + rewritten.selectedMode + " | cookie=" + rewritten.cookie);
+    }
+    if (Number(target.resolution || 0) > 2160 || rewritten.preferred.some(x => Number(x) === 702) || Number(rewritten.cookie) === 702) {
+      console.log("[YT Diag SR v19.3][UNSAFE-FORCE] video=" + (target.videoId || "?") + " | target=" + target.menuLabel + " | pvi=" + rewritten.preferred.join(",") + " | cookie=" + rewritten.cookie + " | fallback=" + (DIAG_FALLBACK || "0"));
+    }
     $done({ body: rewritten.body });
   } catch (e) {
     console.log(PREFIX + " error: " + String(e && e.message || e));
